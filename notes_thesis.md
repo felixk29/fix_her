@@ -30,14 +30,14 @@ the discovery of a new or better cell
  - triangle inequality?????  
  - atari games I guess?  
  - go explore approach only works on cells  
- - cells in their case are 16x16px but no reason why not usable on continuous space  
+ - cells in their case are various states, that are all represented by same downsampled images, 
  - so can just be yoinked for selection for HER + GO  
  - new paper idea let HER GO (explore)   
  
 
 ### Run through of one iteration 
  - We have a goal G, Agent O, History H, Statespace S, Actionspace A, 
-   Dictionary of States D,   
+   Dictionary of Cells(States) D,   
  - Agent tries to to get to G, we take furthest state in trajectory that
    is both interesting according to dictionary, as well as reachable according to D,   
  - add all info to Dictionary,   
@@ -47,8 +47,12 @@ the discovery of a new or better cell
  - How do we figure out if state is reachable?   
  - Do we try to find state to reach? or is the goal setting just for in experience replay?  
  - Is HER combinable with GO explore? As go explore "reduces statespace" but does not guarantee that all states in one Cell are reachable without leaving the cell  
+
+ ### Questions for discussion: 
  - What situations are we aiming for to improve either HER or GO explore?   
- - Are we trying to get the 2-phase based GO explore to use one phase iteratevely?  
+ - Are we trying to get the 2-phase based GO explore to use one phase iteratevely?
+ - Setting of goals is just for replay buffer or are we actually setting those? 
+
 
 ### Papers  
  - [HER](https://arxiv.org/pdf/1707.01495.pdf)    
