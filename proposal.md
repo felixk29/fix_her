@@ -2,11 +2,14 @@
 ### 1. Motivation
 why interesting field?
 why interesting topic/question?
+
+ - enhancing exploration 
+ - enhancing generalization (especially in MTL)
+
+
 ### 2. Hypothesis
 maybe: "Learning to return to unvisited states increases teh generalization in mutlti task learning."
 ### 3. Experiments
-
-
 look at max paper, use his experiment as baseline, with different versions: 
  - one with epsilon (multiple durations of exploring)
  - one with go explore tp to half goal (position of a random state from replay buffer),
@@ -29,6 +32,14 @@ $L[\theta]:=\mathbb{E}[(-||s'_{goal}-i||^2 + \gamma \, max_{a'\in A} \,Q_{\theta
 
 ### 5. Literature Review 
  - HER
+ (https://arxiv.org/pdf/1707.01495.pdf)    
+
  - GO EXPLORE
- - MAX PAPER
- - look if other papers try to increase generalization by utilizing HER or go explore 
+(https://arxiv.org/pdf/1901.10995.pdf) 
+
+ - The Role of Diverse Replay for Generalisation in
+Reinforcement Learning
+(https://arxiv.org/pdf/2306.05727.pdf)
+
+ - Generalized Hindsight for Reinforcement Learning:
+ (https://proceedings.neurips.cc/paper_files/paper/2020/file/57e5cb96e22546001f1d6520ff11d9ba-Paper.pdf)
