@@ -11,18 +11,26 @@ import environments as envs
 
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward', 'done'))
 
-
 class DQN(nn.Module):
     def __init__(self, input_size, output_size):
         super(DQN, self).__init__()
-        self.fc1 = nn.Linear(input_size, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, output_size)
+        self.conv1 = nn.Conv2d(4, 16, kernel_size=3, stride=1,padding=1)
+        self.conv2 = nn.Conv2d(16, 16, kernel_size=3, stride=1,padding=1)
+        self.conv3 = nn.Conv2d(16, 16, kernel_size=3, stride=1,padding=1)
+        self.lin1 = nn.Linear(16*9*9, 256)
+        self.lin2 = nn.Linear(256, 128)
+        self.lin3 = nn.Linear(128, 64)
+        self.lin4 = nn.Linear(64, output_size)
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.lin1(x))
+        x = F.relu(self.lin2(x))
+        x = F.relu(self.lin3(x))
+        x = F.relu(self.lin4(x))
         return x
 
 
@@ -75,37 +83,4 @@ class DQNAgent:
     def update_target_model(self):
         self.target_model.load_state_dict(self.model.state_dict())
 
-
-if __name__ == '__main__':
-    # Example usage
-    env = envs.FourRoom()
-    state_size, action_size = env.spaces()
-    print(state_size, action_size)
-
-    replay_buffer = deque(maxlen=2000)
-    agent = DQNAgent(state_size, action_size)
-
-    for episode in range(max_episodes:=100):
-        state = env.reset()
-        done = False
-        total_reward = 0
-
-        while not done:
-            if episode > (max_episodes - 1):
-                env.render()
-
-            action = agent.select_action(state, epsilon=0.1)
-            next_state, reward, done, trun, info = env.step(action)
-            replay_buffer.append(Transition(state, action, next_state, reward, done))
-            agent.train(replay_buffer, batch_size=128, gamma=0.9)
-
-            state = next_state
-            total_reward += reward
-
-        if episode % 5 == 0:
-            agent.update_target_model()
-
-        print(f"Episode: {episode+1}, Total Reward: {total_reward}")
-
-    env.close()
 

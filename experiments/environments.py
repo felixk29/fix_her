@@ -53,13 +53,12 @@ class MountainCar(envInterface):
 
 import dill
 from four_room.env import FourRoomsEnv
-from four_room.env_wrappers import gym_wrapper
+from four_room.wrappers import gym_wrapper
 
 gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 
-with open('four_room/configs/fourrooms_train_config.pl', 'rb') as file:
+with open('experiments/four_room/configs/fourrooms_train_config.pl', 'rb') as file:
     train_config = dill.load(file)
-
 
 class FourRoom(envInterface):
     def __init__(self,render=False):
@@ -72,6 +71,7 @@ class FourRoom(envInterface):
         self.render=render #apparently a render function is in utils.py should be looked at. 
 
     def spaces(self):
+        print(self.env.observation_space.shape)
         o= self.env.observation_space.shape[0]
         a= self.env.action_space.n
         return o,a
