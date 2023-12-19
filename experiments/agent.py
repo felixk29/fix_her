@@ -78,7 +78,7 @@ class DQNAgent:
 
 if __name__ == '__main__':
     # Example usage
-    env = envs.MountainCar()
+    env = envs.FourRoom()
     state_size, action_size = env.spaces()
     print(state_size, action_size)
 
