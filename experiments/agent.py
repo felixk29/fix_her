@@ -9,14 +9,16 @@ from collections import namedtuple,deque
 
 import environments as envs
 
+#https://github.com/DLR-RM/stable-baselines3/blob/master/stable_baselines3/dqn/dqn.py
+
 Transition = namedtuple('Transition', ('state', 'action', 'next_state', 'reward', 'done'))
 
 class DQN(nn.Module):
     def __init__(self, input_size, output_size):
         super(DQN, self).__init__()
-        self.conv1 = nn.Conv2d(4, 16, kernel_size=3, stride=1,padding=1)
-        self.conv2 = nn.Conv2d(16, 16, kernel_size=3, stride=1,padding=1)
-        self.conv3 = nn.Conv2d(16, 16, kernel_size=3, stride=1,padding=1)
+        self.conv1 = nn.Conv2d(4, 16, kernel_size=3, stride=1,padding=1,padding_mode='circular')
+        self.conv2 = nn.Conv2d(16, 16, kernel_size=3, stride=1,padding=1,padding_mode='circular')
+        self.conv3 = nn.Conv2d(16, 16, kernel_size=3, stride=1,padding=1,padding_mode='circular')
         self.lin1 = nn.Linear(16*9*9, 256)
         self.lin2 = nn.Linear(256, 128)
         self.lin3 = nn.Linear(128, 64)
@@ -46,7 +48,7 @@ class DQNAgent:
         #self.target_model.load_state_dict(self.model.state_dict())
         self.target_model.eval()
 
-        self.optimizer = optim.Adam(self.model.parameters(), lr=0.01)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
 
     def select_action(self, state, epsilon):
         if random.random() < epsilon:
@@ -64,11 +66,11 @@ class DQNAgent:
         transitions = random.sample(replay_buffer, batch_size)
         batch = Transition(*zip(*transitions))
 
-        state_batch = torch.FloatTensor(batch.state).to(self.device)
-        action_batch = torch.LongTensor(batch.action).unsqueeze(1).to(self.device)
-        reward_batch = torch.FloatTensor(batch.reward).unsqueeze(1).to(self.device)
-        next_state_batch = torch.FloatTensor(batch.next_state).to(self.device)
-        done_batch = torch.FloatTensor(batch.done).unsqueeze(1).to(self.device)
+        state_batch = torch.FloatTensor(np.array(batch.state)).to(self.device)
+        action_batch = torch.LongTensor(np.array(batch.action)).unsqueeze(1).to(self.device)
+        reward_batch = torch.FloatTensor(np.array(batch.reward)).unsqueeze(1).to(self.device)
+        next_state_batch = torch.FloatTensor(np.array(batch.next_state)).to(self.device)
+        done_batch = torch.FloatTensor(np.array(batch.done)).unsqueeze(1).to(self.device)
 
         q_values = self.model(state_batch).gather(1, action_batch)
         next_q_values = self.target_model(next_state_batch).max(1)[0].unsqueeze(1)
