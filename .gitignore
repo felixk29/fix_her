@@ -1,5 +1,8 @@
 #self done
 experiments/forFun.py
+.vscode/
+experiments/logs
+experiments/four_room
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
