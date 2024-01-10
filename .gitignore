@@ -2,7 +2,11 @@
 experiments/forFun.py
 .vscode/
 experiments/logs
-experiments/four_room
+experiments/wandb   
+experiments/four_room/tensorboard
+four_room
+
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
