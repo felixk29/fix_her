@@ -2,32 +2,43 @@ import torch
 import os
 import numpy as np
 import gymnasium as gym
+import wandb
+import stable_baselines3 as sb3 
 
 print("current path: ", (os.getcwd()))
 print("Done importing!")
-
-base_path=os.getcwd()+'/experiments/'
-
 
 from four_room.env import FourRoomsEnv
 
 gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 
-## Creating Environments 2##
+
 import dill
 from four_room.env import FourRoomsEnv
 from four_room.wrappers import gym_wrapper
 
-from stable_baselines3.common.vec_env import SubprocVecEnv, VecFrameStack, DummyVecEnv
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv
+from adapted_vec_env import AdaptedVecEnv
+
+from stable_baselines3.common.callbacks import EvalCallback
+from wandb.integration.sb3 import WandbCallback
+base_log = "./experiments/logs/"
+os.makedirs(base_log, exist_ok=True)
+
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from torch import nn
+from tpdqn import tpDQN
+from doubledqn import DoubleDQN
 
 
-with open(f'{base_path}four_room/configs/fourrooms_train_config.pl', 'rb') as file:
+with open('./experiments/four_room/configs/fourrooms_train_config.pl', 'rb') as file:
     train_config = dill.load(file)
 
-with open(f'{base_path}four_room/configs/fourrooms_test_0_config.pl', 'rb') as file:
+with open('./experiments/four_room/configs/fourrooms_test_0_config.pl', 'rb') as file:
     test_0_config = dill.load(file)
 
-with open(f'{base_path}four_room/configs/fourrooms_test_100_config.pl', 'rb') as file:
+with open('./experiments/four_room/configs/fourrooms_test_100_config.pl', 'rb') as file:
     test_100_config = dill.load(file)
 
 def make_env_fn(config, seed: int= 0, rank: int = 0):
@@ -38,7 +49,7 @@ def make_env_fn(config, seed: int= 0, rank: int = 0):
                     doors_pos=config['topologies'], 
                     agent_dir=config['agent directions']))
         env.reset(seed=seed+rank)
-        return env
+        return Monitor(env)
     return _init
 
 #######  
@@ -48,20 +59,14 @@ num_envs=8
 env=make_env_fn(train_config)()
 
 train_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i) for i in range(num_envs)])
-train_env_tp = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i) for i in range(num_envs)])
+train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=0, rank=i) for i in range(num_envs)])
 
-tr_ev_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i) for i in range(num_envs)])
+tr_eval_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i) for i in range(num_envs)])
 test_0_env = DummyVecEnv([make_env_fn(test_0_config, seed=0, rank=i) for i in range(num_envs)])
 test_100_env = DummyVecEnv([make_env_fn(test_100_config, seed=0, rank=i) for i in range(num_envs)])
 
-### Creating Agents ###
 
-## Baseline 
-from stable_baselines3.dqn import CnnPolicy
-from stable_baselines3 import DQN, tpDQN
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-from torch import nn
-
+    ### Creating Agents ###
 
 lr_schedule = lambda x: 0.00009*x+0.00001
 
@@ -97,96 +102,82 @@ class Baseline_CNN(BaseFeaturesExtractor):
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         return self.linear(self.cnn(observations))
+    
+
+wandb.tensorboard.patch(root_logdir="./experiments/logs/")
+
+
+run=wandb.init(
+    # set the wandb project where this run will be logged
+    project="thesis",
+    name="baseline",
+    monitor_gym=True,
+    sync_tensorboard=True,
+    # track hyperparameters and run metadata
+)
 
 baseline_policy_kwargs = dict(activation_fn=torch.nn.ReLU, net_arch=[512,256,128], 
                               features_extractor_class=Baseline_CNN, features_extractor_kwargs={'features_dim': 512},
-                              optimizer_class=torch.optim.Adam, 
+                              optimizer_class=torch.optim.Adam, optimizer_kwargs={'weight_decay': 1e-5},
                               normalize_images=False)
 
-baseline_model = DQN('CnnPolicy', train_env, buffer_size=500000, batch_size=256, gamma=0.99, 
-                     
-                    learning_starts=1000, #idk what to set this at, for testing set at 100
 
-                     gradient_steps=1, train_freq=(10, 'step'), target_update_interval=10, tau=0.01,
-                     exploration_initial_eps=1.0, exploration_final_eps=0.01, max_grad_norm=1.0, learning_rate=lr_schedule,
-                     verbose=1, tensorboard_log="./four_room/tensorboard/", policy_kwargs=baseline_policy_kwargs ,device='cuda')
+baseline_model = DoubleDQN('CnnPolicy', train_env, buffer_size=100000, batch_size=256, gamma=0.99, learning_starts=256, 
+                     gradient_steps=1, train_freq=(10, 'step'), target_update_interval=10, tau=0.01, exploration_fraction=0.2,
+                     exploration_initial_eps=1.0, exploration_final_eps=0.01, max_grad_norm=1.0, learning_rate=1e-4,
+                     verbose=0, tensorboard_log=f"runs/{run.id}/", policy_kwargs=baseline_policy_kwargs ,device='cuda')
 
-tp_model = tpDQN('CnnPolicy', train_env_tp, buffer_size=500000, batch_size=256, gamma=0.99, 
-                 
-                    learning_starts=1000, #idk what to set this at, for testing set at 100
 
-                     gradient_steps=1, train_freq=(10, 'step'), target_update_interval=10, tau=0.01,
-                     exploration_initial_eps=1.0, exploration_final_eps=0.01, max_grad_norm=1.0, learning_rate=lr_schedule,
-                     verbose=1, tensorboard_log="./four_room/tensorboard/", policy_kwargs=baseline_policy_kwargs ,device='cuda')
+eval_tr_callback = EvalCallback(tr_eval_env, log_path=base_log+"log_baseline/tr/", eval_freq=max(10000 // num_envs, 1),
+                              n_eval_episodes=50, deterministic=True, render=False, verbose=0)
 
-### Training Agents ###
-from stable_baselines3.common.callbacks import EvalCallback
-base_log = base_path +"logs/"
-os.makedirs(base_log, exist_ok=True)
+eval_0_callback = EvalCallback(test_0_env, log_path=base_log+"log_baseline/0/", eval_freq=max(10000 // num_envs, 1),
+                              n_eval_episodes=50, deterministic=True, render=False, verbose=0)
 
-eval_tr_callback = EvalCallback(tr_ev_env, log_path=base_log+"log_baseline/tr/", eval_freq=max(1000 // num_envs, 1),
-                              n_eval_episodes=20, deterministic=True, render=False)
+eval_100_callback = EvalCallback(test_100_env, log_path=base_log+"log_baseline/100/", eval_freq=max(10000 // num_envs, 1),
+                              n_eval_episodes=50, deterministic=True, render=False, verbose=0)
 
-eval_0_callback = EvalCallback(test_0_env, log_path=base_log+"log_baseline/0/", eval_freq=max(1000 // num_envs, 1),
-                              n_eval_episodes=20, deterministic=True, render=False)
+baseline_wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
-eval_100_callback = EvalCallback(test_100_env, log_path=base_log+"log_baseline/100/", eval_freq=max(1000 // num_envs, 1),
-                              n_eval_episodes=20, deterministic=True, render=False)
+baseline_model.learn(total_timesteps=500000,progress_bar=True, log_interval=10, callback=[eval_tr_callback,eval_0_callback,eval_100_callback,baseline_wandb_callback])
 
-#total_timesteps = 500000 should be used, will use 200000 for testing
-#baseline_model.learn(total_timesteps=500000,progress_bar=True, log_interval=10, callback=[eval_tr_callback,eval_0_callback,eval_100_callback])
+wandb.finish()
 
-eval_tr_callback = EvalCallback(tr_ev_env, log_path=base_log+"log_tp/tr/", eval_freq=max(1000 // num_envs, 1),
-                              n_eval_episodes=20, deterministic=True, render=False)
+wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
-eval_0_callback = EvalCallback(test_0_env, log_path=base_log+"log_tp/0/", eval_freq=max(1000 // num_envs, 1),
-                              n_eval_episodes=20, deterministic=True, render=False)
+run=wandb.init(
+    # set the wandb project where this run will be logged
+    project="thesis",
+    name="tpdqn",
+    monitor_gym=True,
+    sync_tensorboard=True,
+    # track hyperparameters and run metadata
+)
 
-eval_100_callback = EvalCallback(test_100_env, log_path=base_log+"log_tp/100/", eval_freq=max(1000 // num_envs, 1),
-                              n_eval_episodes=20, deterministic=True, render=False)
+tp_policy_kwargs = dict(activation_fn=torch.nn.ReLU, net_arch=[512,256,128], 
+                              features_extractor_class=Baseline_CNN, features_extractor_kwargs={'features_dim': 512},
+                              optimizer_class=torch.optim.Adam, optimizer_kwargs={'weight_decay': 1e-5},
+                              normalize_images=False)
 
-#total_timesteps = 500000 should be used, will use 200000 for testing
-tp_model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=[eval_tr_callback,eval_0_callback,eval_100_callback])
 
-### Visualizing Results ###
+tp_model = tpDQN('CnnPolicy', train_env_tp, buffer_size=100000, batch_size=256, gamma=0.99, learning_starts=256,
+                     gradient_steps=1, train_freq=(10, 'step'), target_update_interval=10, tau=0.01, exploration_fraction=0.2,
+                     exploration_initial_eps=1.0, exploration_final_eps=0.01, max_grad_norm=1.0, learning_rate=1e-4,
+                     verbose=0, tensorboard_log=f"runs/{run.id}/", policy_kwargs=tp_policy_kwargs ,device='cuda')
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd
 
-results={}
-base_log='./logs/'
-def plot_reward(ax,dt, title):
-    sns.lineplot(x=dt['timesteps'], y=dt['results'], ax=ax)
-    ax.set_title(title)
-    ax.set_ylabel('Reward')
-    ax.set_xlabel('Timesteps')
-    ax.grid(True)
+eval_tr_callback = EvalCallback(tr_eval_env, log_path=base_log+"log_tp/tr/", eval_freq=max(10000 // num_envs, 1),
+                              n_eval_episodes=50, deterministic=True, render=False, verbose=0)
 
-def plot_episode_length(ax,dt, title):
-    sns.lineplot(x=dt['timesteps'], y=dt['ep_lengths'], ax=ax)
-    ax.set_title(title)
-    ax.set_ylabel('Episode Length')
-    ax.set_xlabel('Timesteps')
-    ax.grid(True)
+eval_0_callback = EvalCallback(test_0_env, log_path=base_log+"log_tp/0/", eval_freq=max(10000 // num_envs, 1),
+                              n_eval_episodes=50, deterministic=True, render=False, verbose=0)
 
-fig, ax = plt.subplots(3,2, figsize=(10,10))
+eval_100_callback = EvalCallback(test_100_env, log_path=base_log+"log_tp/100/", eval_freq=max(10000 // num_envs, 1),
+                              n_eval_episodes=50, deterministic=True, render=False, verbose=0)
 
-for name in ['tp','baseline']:
-    for env in ['tr', '0', '100']:
-        tmp=np.load(base_log+'log_'+name+'/'+env+'/evaluations.npz')
-        results[env]={}
-        results[env]['results']=np.mean(tmp['results'],axis=1)
-        results[env]['ep_lengths']=np.mean(tmp['ep_lengths'],axis=1)
-        results[env]['timesteps']=tmp['timesteps']
+tp_wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
-    plot_reward(ax[0,0],results['tr'], 'Training Reward')
-    plot_episode_length(ax[0,1],results['tr'], 'Training Episode Length')
 
-    plot_reward(ax[1,0],results['100'], 'Test 100 Reward')
-    plot_episode_length(ax[1,1],results['100'], 'Test 100 Episode Length')
+tp_model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=[eval_tr_callback,eval_0_callback,eval_100_callback, tp_wandb_callback])
+print(tp_model.refilled)
 
-    plot_reward(ax[2,0],results['0'], 'Test 0 Reward')
-    plot_episode_length(ax[2,1],results['0'], 'Test 0 Episode Length')
-
-plt.tight_layout()

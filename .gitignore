@@ -5,7 +5,8 @@ experiments/logs
 experiments/wandb   
 experiments/four_room/tensorboard
 four_room
-
+wandb
+runs
 
 
 # Byte-compiled / optimized / DLL files

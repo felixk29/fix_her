@@ -44,6 +44,9 @@ class AdaptedVecEnv(DummyVecEnv):
                 if np.random.uniform() < self.tp_chance:
                     tp_target=self.get_state()
                     obs, self.reset_infos[env_idx] = self.envs[env_idx].reset(options={"load_state": tp_target})
+                else:
+                    obs, self.reset_infos[env_idx] = self.envs[env_idx].reset()
+            
             self._save_obs(env_idx, obs)
         return (self._obs_from_buf(), np.copy(self.buf_rews), np.copy(self.buf_dones), deepcopy(self.buf_infos))
 

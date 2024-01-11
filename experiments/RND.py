@@ -43,3 +43,11 @@ class RND(nn.Module):
         with th.no_grad():
             target = self.target(x)
         return pred, target
+    
+    def train(self, x):
+        pred, target = self.forward(x)
+        loss = F.mse_loss(pred, target)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        return loss.item()

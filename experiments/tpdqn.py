@@ -88,6 +88,7 @@ class tpDQN(DoubleDQN):
 
         self.env.set_get_state(self._inject_buffer_into_env)
         self.env.tp_chance=tp_chance
+        self.refilled=0
 
     #just using a stack, if threading problems could upgrade to a queue, this is just simpler
     state_stack=[]
@@ -95,8 +96,14 @@ class tpDQN(DoubleDQN):
 
     def _inject_buffer_into_env(self):
         if len(self.state_stack) == 0:
+            self.refilled+=1
             replay_data = self.replay_buffer.sample(self.state_stack_size * 3, env=self._vec_normalize_env)  # type: ignore[union-attr]
+            # this is a named tuple, delete every entry that has or truncated = True
+            #TODO maybe add a check that its not done before it arrived?? but idk if nessary
+
             observations=replay_data.observations
+
+
             obs=observations.view(self.state_stack_size * 3, -1)
             obs=obs.type(th.FloatTensor)
             obs=obs.to(self.device)
@@ -105,4 +112,6 @@ class tpDQN(DoubleDQN):
             _, indices = th.sort(rnd_loss, descending=False, axis=0)
             indices = indices[:self.state_stack_size]
             self.state_stack = list(observations[indices].unbind())
+            
+            self.rnd.train(obs)
         return self.state_stack.pop().reshape(self.env.observation_space.shape).cpu().numpy()
