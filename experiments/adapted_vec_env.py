@@ -19,7 +19,8 @@ class AdaptedVecEnv(DummyVecEnv):
     """
 
     get_state: Callable[[], np.ndarray] = None
-    tp_chance: float = -1
+    is_buffer_ready: Callable[[], np.ndarray] = None
+    tp_chance: Callable[[],float] = None
 
     def set_get_state(self, get_state: Callable[[], np.ndarray]):
         self.get_state = get_state
@@ -41,7 +42,7 @@ class AdaptedVecEnv(DummyVecEnv):
                 # save final observation where user can get it, then reset
                 self.buf_infos[env_idx]["terminal_observation"] = obs
                 ## TODO RND IMPLEMENTATION
-                if np.random.uniform() < self.tp_chance:
+                if self.is_buffer_ready() and np.random.uniform() < self.tp_chance():
                     tp_target=self.get_state()
                     obs, self.reset_infos[env_idx] = self.envs[env_idx].reset(options={"load_state": tp_target})
                 else:
@@ -56,6 +57,8 @@ class AdaptedVecEnv(DummyVecEnv):
     def reset(self) -> VecEnvObs:
         for env_idx in range(self.num_envs):
             maybe_options = {"options": self._options[env_idx]} if self._options[env_idx] else {}
+            if self.is_buffer_ready() and np.random.uniform() < self.tp_chance():
+                maybe_options["load_state"]=self.get_state()
             obs, self.reset_infos[env_idx] = self.envs[env_idx].reset(seed=self._seeds[env_idx], **maybe_options)
             self._save_obs(env_idx, obs)
         # Seeds and options are only used once

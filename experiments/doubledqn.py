@@ -1,5 +1,5 @@
 from typing import TypeVar
-
+from stable_baselines3.common.type_aliases import MaybeCallback
 import numpy as np
 import torch as th
 from torch.nn import functional as F
@@ -8,6 +8,7 @@ from stable_baselines3 import DQN
 SelfDoubleDQN = TypeVar("SelfDoubleDQN", bound="DoubleDQN")
 
 class DoubleDQN(DQN):
+
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
@@ -61,3 +62,21 @@ class DoubleDQN(DQN):
 
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/loss", np.mean(losses))
+
+    def learn(
+    self: SelfDoubleDQN,
+    total_timesteps: int,
+    callback: MaybeCallback = None,
+    log_interval: int = 4,
+    tb_log_name: str = "DoubleDQN",
+    reset_num_timesteps: bool = True,
+    progress_bar: bool = False,
+    ) -> SelfDoubleDQN:
+        return super().learn(
+            total_timesteps=total_timesteps,
+            callback=callback,
+            log_interval=log_interval,
+            tb_log_name=tb_log_name,
+            reset_num_timesteps=reset_num_timesteps,
+            progress_bar=progress_bar,
+        )

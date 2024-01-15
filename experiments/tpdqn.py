@@ -1,5 +1,6 @@
 import warnings
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type, TypeVar, Union
+from stable_baselines3.common.type_aliases import MaybeCallback
 
 import numpy as np
 import torch as th
@@ -12,11 +13,13 @@ from stable_baselines3.dqn.policies import DQNPolicy
 from doubledqn import DoubleDQN
 from RND import RND
 
-SelftpDQN = TypeVar("SelftpDQN", bound="tpDQN")
+SelftpDDQN = TypeVar("SelftpDDQN", bound="tpDQN")
 
 
 class tpDQN(DoubleDQN):
- 
+    
+    _total_timesteps_tp: int=0
+
     def __init__(
         self,
         policy: Union[str, Type[DQNPolicy]],
@@ -45,7 +48,8 @@ class tpDQN(DoubleDQN):
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
         #self added
-        tp_chance:float=.05,
+        tp_chance_start:float=.1,
+        tp_chance_end:float=.2,
     ) -> None:
         super().__init__(
             policy,
@@ -87,8 +91,22 @@ class tpDQN(DoubleDQN):
         self.rnd= RND(self.env.observation_space.shape, device=self.device)
 
         self.env.set_get_state(self._inject_buffer_into_env)
-        self.env.tp_chance=tp_chance
+        self.env.tp_chance=self._inject_tp_chance
+        self.env.is_buffer_ready=self._inject_is_buffer_ready
+        self.max_tp_chance=tp_chance_end
+        self.start_tp_chance=tp_chance_start
+
         self.refilled=0
+
+
+    def _inject_tp_chance(self):
+        number = self.max_tp_chance - (self.max_tp_chance - self.start_tp_chance) * self.num_timesteps / self._total_timesteps_tp
+        return number
+
+    def _inject_is_buffer_ready(self):
+            
+        return self.num_timesteps > self.learning_starts
+
 
     #just using a stack, if threading problems could upgrade to a queue, this is just simpler
     state_stack=[]
@@ -115,3 +133,22 @@ class tpDQN(DoubleDQN):
             
             self.rnd.train(obs)
         return self.state_stack.pop().reshape(self.env.observation_space.shape).cpu().numpy()
+
+    def learn(
+    self: SelftpDDQN,
+    total_timesteps: int,
+    callback: MaybeCallback = None,
+    log_interval: int = 4,
+    tb_log_name: str = "tpDDQN",
+    reset_num_timesteps: bool = True,
+    progress_bar: bool = False,
+    ) -> SelftpDDQN:
+        self._total_timesteps_tp = total_timesteps
+        return super().learn(
+            total_timesteps=total_timesteps,
+            callback=callback,
+            log_interval=log_interval,
+            tb_log_name=tb_log_name,
+            reset_num_timesteps=reset_num_timesteps,
+            progress_bar=progress_bar,
+        )
