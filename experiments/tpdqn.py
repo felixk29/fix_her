@@ -131,8 +131,16 @@ class tpDQN(DoubleDQN):
             indices = indices[:self.state_stack_size]
             self.state_stack = list(observations[indices].unbind())
             
-            self.rnd.train(obs)
         return self.state_stack.pop().reshape(self.env.observation_space.shape).cpu().numpy()
+
+    def train(self, gradient_steps: int, batch_size: int = 100) -> None:
+        super.train(gradient_steps, batch_size)
+        observations=self.last_batch.observations
+        obs=observations.view(batch_size, -1)
+        obs=obs.type(th.FloatTensor)
+        obs=obs.to(self.device)
+        self.rnd.train(obs)        
+
 
     def learn(
     self: SelftpDDQN,

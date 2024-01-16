@@ -8,6 +8,7 @@ from stable_baselines3 import DQN
 SelfDoubleDQN = TypeVar("SelfDoubleDQN", bound="DoubleDQN")
 
 class DoubleDQN(DQN):
+    last_batch=None
 
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
         # Switch to train mode (this affects batch norm / dropout)
@@ -19,8 +20,9 @@ class DoubleDQN(DQN):
         for _ in range(gradient_steps):
 
             # Sample replay buffer
-            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
 
+            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+            self.last_batch=replay_data
             # Do not backpropagate gradient to the target network
             with th.no_grad():
                 # Compute the next Q-values using the target network
