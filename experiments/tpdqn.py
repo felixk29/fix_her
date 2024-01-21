@@ -126,15 +126,19 @@ class tpDQN(DoubleDQN):
             obs=obs.type(th.FloatTensor)
             obs=obs.to(self.device)
             pred, target = self.rnd(obs)
+
+            #self.rnd.train(obs)
+
             rnd_loss = F.l1_loss(pred, target, reduction='none')
-            _, indices = th.sort(rnd_loss, descending=False, axis=0)
+            _, indices = th.sort(rnd_loss, descending=True, axis=0)
+
             indices = indices[:self.state_stack_size]
             self.state_stack = list(observations[indices].unbind())
             
         return self.state_stack.pop().reshape(self.env.observation_space.shape).cpu().numpy()
 
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
-        super.train(gradient_steps, batch_size)
+        super().train(gradient_steps, batch_size)
         observations=self.last_batch.observations
         obs=observations.view(batch_size, -1)
         obs=obs.type(th.FloatTensor)

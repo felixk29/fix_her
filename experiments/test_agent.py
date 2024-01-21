@@ -17,9 +17,6 @@ gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 num_envs=10
 seed=0
 
-np.random.seed(seed)
-
-
 import dill
 from four_room.env import FourRoomsEnv
 from four_room.wrappers import gym_wrapper
@@ -98,80 +95,87 @@ class Baseline_CNN(BaseFeaturesExtractor):
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
         return self.linear(self.cnn(observations))
 
-cf={'policy': 'CnnPolicy',
-        'buffer_size': 50000,
-        'batch_size': 512,
-        'gamma': 0.99,
-        'learning_starts': 512,
-        'max_grad_norm': 1.0,
-        'gradient_steps': 1,
-        'train_freq': (10, 'step'),
-        'target_update_interval': 10,
-        'tau': 0.01,
-        'exploration_fraction': 1.0,
-        'exploration_initial_eps': 1.0,
-        'exploration_final_eps': 0.01,
-        'learning_rate': 1e-3,
-        'verbose': 0,
-        'device': 'cuda',
-        'policy_config':{
-            'activation_fn': torch.nn.ReLU,
-            'net_arch': [128, 64],
-            'features_extractor_class': Baseline_CNN,
-            'features_extractor_kwargs':{'features_dim': 512},
-            'optimizer_class':torch.optim.Adam,
-            'optimizer_kwargs':{'weight_decay': 1e-5},
-            'normalize_images':False
-        }
-}
+
 
 
 wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
 ## TP Version ##
-for vl in [(0.0,0.0),(0.1,0.1),(0.2,0.2)]:
-    for rn in range(5,10):
+for rn in range(10):
+    for bs in [10,50,500]:
+        for tpc in [(0.2,0.2),(0.5,0.5),(1.0,1.0)]:
 
-        print("\n----------------------------")
-        print(f"Starting run {rn} with tp chance {vl}")
-        print("----------------------------\n")
+            print("\n----------------------------------------")
+            print(f"Starting run {rn} with tp chance {tpc}")   
+            print("----------------------------------------\n")
 
-        run=wandb.init(
-            project="thesis",
-            name="tpdqn",
-            monitor_gym=True,
-            sync_tensorboard=True,
-        )
+            experiment=f"tpchance_b{bs}k/"
+            path=base_log+f"{experiment}/{tpc[0]}e_{tpc[1]}e"
 
+            cf={'policy': 'CnnPolicy',
+                    'buffer_size': bs*1000,
+                    'batch_size': 512,
+                    'gamma': 0.99,
+                    'learning_starts': 512,
+                    'max_grad_norm': 1.0,
+                    'gradient_steps': 1,
+                    'train_freq': (10, 'step'),
+                    'target_update_interval': 10,
+                    'tau': 0.01,
+                    'exploration_fraction': 0.5,
+                    'exploration_initial_eps': 1.0,
+                    'exploration_final_eps': 0.01,
+                    'learning_rate': 1e-3,
+                    'verbose': 0,
+                    'device': 'cuda',
+                    'policy_config':{
+                        'activation_fn': torch.nn.ReLU,
+                        'net_arch': [128, 64],
+                        'features_extractor_class': Baseline_CNN,
+                        'features_extractor_kwargs':{'features_dim': 512},
+                        'optimizer_class':torch.optim.Adam,
+                        'optimizer_kwargs':{'weight_decay': 1e-5},
+                        'normalize_images':False
+                    },
+                    'tp_chance':tpc,
+            }
 
-        train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
-        tr_eval_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
-        test_0_env_tp = DummyVecEnv([make_env_fn(test_0_config, seed=seed, rank=i) for i in range(num_envs)])
-        test_100_env_tp = DummyVecEnv([make_env_fn(test_100_config, seed=seed, rank=i) for i in range(num_envs)])
+            run=wandb.init(
+                project="thesis",
+                name=f"tpdqn_b{bs}k_{tpc[0]}_{tpc[1]}_ep_frac_05_{rn}",
+                config=cf,
+                monitor_gym=True,
+                sync_tensorboard=True,
+            )
 
-        tp_model = tpDQN(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
-                                learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
-                                    target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
-                                    exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
-                                    max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
-                                    tensorboard_log=f"runs/{run.id}/", policy_kwargs=cf['policy_config'] ,device=cf['device'],
-                                    tp_chance_start=vl[0],tp_chance_end=vl[1])
+            train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
+            tr_eval_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
+            test_0_env_tp = DummyVecEnv([make_env_fn(test_0_config, seed=seed, rank=i) for i in range(num_envs)])
+            test_100_env_tp = DummyVecEnv([make_env_fn(test_100_config, seed=seed, rank=i) for i in range(num_envs)])
 
-        eval_tr_callback = EvalCallback(tr_eval_env_tp, log_path=base_log+f"log_b50_tp_{round(vl[0]*100)}_{round(vl[1]*100)}/tr/{rn}/", eval_freq=max(25000 // num_envs, 1),
-                                    n_eval_episodes=100, deterministic=True, render=False, verbose=0)
+            tp_model = tpDQN(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
+                                    learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
+                                        target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
+                                        exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
+                                        max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
+                                        tensorboard_log=f"runs/{run.id}/", policy_kwargs=cf['policy_config'] ,device=cf['device'],
+                                        tp_chance_start=tpc[0],tp_chance_end=tpc[1])
 
-        eval_0_callback = EvalCallback(test_0_env_tp, log_path=base_log+f"log_b50_tp_{round(vl[0]*100)}_{round(vl[1]*100)}/0/{rn}/", eval_freq=max(25000 // num_envs, 1),
-                                    n_eval_episodes=100, deterministic=True, render=False, verbose=0)
+            eval_tr_callback = EvalCallback(tr_eval_env_tp, log_path=f"{path}/tr/{rn}/", eval_freq=max(25000 // num_envs, 1),
+                                        n_eval_episodes=100, deterministic=True, render=False, verbose=0)
 
-        eval_100_callback = EvalCallback(test_100_env_tp, log_path=base_log+f"log_b50_tp_{round(vl[0]*100)}_{round(vl[1]*100)}/100/{rn}/", eval_freq=max(25000 // num_envs, 1),
-                                    n_eval_episodes=100, deterministic=True, render=False, verbose=0)
+            eval_0_callback = EvalCallback(test_0_env_tp, log_path=f"{path}/0/{rn}/", eval_freq=max(25000 // num_envs, 1),
+                                        n_eval_episodes=100, deterministic=True, render=False, verbose=0)
 
-        tp_wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
+            eval_100_callback = EvalCallback(test_100_env_tp, log_path=f"{path}/100/{rn}/", eval_freq=max(25000 // num_envs, 1),
+                                        n_eval_episodes=100, deterministic=True, render=False, verbose=0)
 
-        tp_model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=[eval_tr_callback,eval_0_callback,eval_100_callback, tp_wandb_callback])
-        print(tp_model.refilled)
+            tp_wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
-        wandb.finish()
+            tp_model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=[eval_tr_callback,eval_0_callback,eval_100_callback, tp_wandb_callback])
+            print(tp_model.refilled)
+
+            wandb.finish()
 
 
 ## Baseline ##
