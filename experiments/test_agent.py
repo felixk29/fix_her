@@ -97,7 +97,6 @@ class Baseline_CNN(BaseFeaturesExtractor):
 
 
 
-
 wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
 ## TP Version ##
@@ -125,7 +124,7 @@ for rn in range(10):
                     'exploration_fraction': 0.5,
                     'exploration_initial_eps': 1.0,
                     'exploration_final_eps': 0.01,
-                    'learning_rate': 1e-3,
+                    'learning_rate': 1e-4,
                     'verbose': 0,
                     'device': 'cuda',
                     'policy_config':{
@@ -149,9 +148,9 @@ for rn in range(10):
             )
 
             train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
-            tr_eval_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
-            test_0_env_tp = DummyVecEnv([make_env_fn(test_0_config, seed=seed, rank=i) for i in range(num_envs)])
-            test_100_env_tp = DummyVecEnv([make_env_fn(test_100_config, seed=seed, rank=i) for i in range(num_envs)])
+            tr_eval_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(1)])
+            test_0_env_tp = DummyVecEnv([make_env_fn(test_0_config, seed=seed, rank=i) for i in range(1)])
+            test_100_env_tp = DummyVecEnv([make_env_fn(test_100_config, seed=seed, rank=i) for i in range(1)])
 
             tp_model = tpDQN(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
                                     learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
@@ -162,13 +161,13 @@ for rn in range(10):
                                         tp_chance_start=tpc[0],tp_chance_end=tpc[1])
 
             eval_tr_callback = EvalCallback(tr_eval_env_tp, log_path=f"{path}/tr/{rn}/", eval_freq=max(25000 // num_envs, 1),
-                                        n_eval_episodes=100, deterministic=True, render=False, verbose=0)
+                                        n_eval_episodes=40, deterministic=True, render=False, verbose=0)
 
             eval_0_callback = EvalCallback(test_0_env_tp, log_path=f"{path}/0/{rn}/", eval_freq=max(25000 // num_envs, 1),
-                                        n_eval_episodes=100, deterministic=True, render=False, verbose=0)
+                                        n_eval_episodes=40, deterministic=True, render=False, verbose=0)
 
             eval_100_callback = EvalCallback(test_100_env_tp, log_path=f"{path}/100/{rn}/", eval_freq=max(25000 // num_envs, 1),
-                                        n_eval_episodes=100, deterministic=True, render=False, verbose=0)
+                                        n_eval_episodes=40, deterministic=True, render=False, verbose=0)
 
             tp_wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
