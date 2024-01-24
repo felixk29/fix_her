@@ -48,8 +48,8 @@ class tpDQN(DoubleDQN):
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
         #self added
-        tp_chance_start:float=.1,
-        tp_chance_end:float=.2,
+        tp_chance_start:float=.0,
+        tp_chance_end:float=.0,
     ) -> None:
         super().__init__(
             policy,
@@ -143,7 +143,9 @@ class tpDQN(DoubleDQN):
         obs=observations.view(batch_size, -1)
         obs=obs.type(th.FloatTensor)
         obs=obs.to(self.device)
-        self.rnd.train(obs)        
+        #only train if tp is actually used anytime
+        if self.start_tp_chance != 0. and self.max_tp_chance != 0.:
+            self.rnd.train(obs)        
 
 
     def learn(
