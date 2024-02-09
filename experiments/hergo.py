@@ -44,10 +44,7 @@ class UVFWrapper(ObservationWrapper):
         return {'observation':observation, 'achieved_goal':observation, 'desired_goal':np.zeros_like(observation)}
     
     def compute_reward(self, achieved_goal, desired_goal, info):
-        if np.array_equal(achieved_goal, desired_goal):
-            return np.array([1.0])
-        else:
-            return np.array([.0])
+        return np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
 
 
 class MultiInput_CNN(BaseFeaturesExtractor):

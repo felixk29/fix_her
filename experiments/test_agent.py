@@ -4,7 +4,9 @@ import numpy as np
 import gymnasium as gym
 import wandb
 import stable_baselines3 as sb3 
+from gymnasium import spaces
 
+from hergo import HERGO, MultiInput_CNN
 print("current path: ", (os.getcwd()))
 print("Done importing!")
 
@@ -14,7 +16,7 @@ gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 
 #### Paramampa
 ### EXPERIMT SETUP BUGGY; RUN THEM SOLO
-num_envs=10
+num_envs=1
 seed=0
 
 import dill
@@ -94,74 +96,85 @@ class Baseline_CNN(BaseFeaturesExtractor):
         self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
 
     def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        if len(observations.shape) == 3:
+            observations = observations.unsqueeze(0)
         return self.linear(self.cnn(observations))
+    
+### MultiInput_CNN for UVF ###
+device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
-for rn in range(8,10):
-    for bs in [10,50,500]:
-        for tpc in [(0.5,0.5)]:
-            for epsf in [0.1,1.0]:
+from stable_baselines3 import HerReplayBuffer
 
-                if rn==8 and bs in [10,50]:
-                    continue
+for rn in range(10):
+    for bs in [500]:
+        for tpc in [1.0]:
             
                 print("\n------------------------------------------------")
-                print(f"Starting run {rn} with tp chance {tpc}, buffer size {bs}k and eps frac {epsf}")   
+                print(f"Starting run {rn} with tp chance {tpc}, buffer size {bs}k")   
                 print("------------------------------------------------\n")
 
-                experiment=f"tpchance_b{bs}k/"
+                experiment=f"hergo_b{bs}k/"
 
-                path=base_log+f"{experiment}/{tpc[0]}_{tpc[1]}{'_e01' if epsf!=1. else ''}"
+                path=base_log+f"{experiment}/{tpc}"
 
                 cf={'policy': 'CnnPolicy',
-                        'buffer_size': bs*1000,
-                        'batch_size': 256,
-                        'gamma': 0.99,
-                        'learning_starts': 256,
-                        'max_grad_norm': 1.0,
-                        'gradient_steps': 1,
-                        'train_freq': (10//num_envs, 'step'),
-                        'target_update_interval': 10,
-                        'tau': 0.01,
-                        'exploration_fraction': epsf,
-                        'exploration_initial_eps': 1.0,
-                        'exploration_final_eps': 0.01,
-                        'learning_rate': 1e-4,
-                        'verbose': 0,
-                        'device': 'cuda',
-                        'policy_config':{
-                            'activation_fn': torch.nn.ReLU,
-                            'net_arch': [128, 64],
-                            'features_extractor_class': Baseline_CNN,
-                            'features_extractor_kwargs':{'features_dim': 512},
-                            'optimizer_class':torch.optim.Adam,
-                            'optimizer_kwargs':{'weight_decay': 1e-5},
-                            'normalize_images':False
-                        },
-                        'tp_chance':tpc,
+                    'buffer_size': bs*1000,
+                    'batch_size': 256,
+                    'gamma': 0.99,
+                    'learning_starts': 256,
+                    'max_grad_norm': 1.0,
+                    'gradient_steps': 1,
+                    'train_freq': (10//num_envs, 'step'),
+                    'target_update_interval': 10,
+                    'tau': 0.01,
+                    'exploration_fraction': 1.0,
+                    'exploration_initial_eps': 1.0,
+                    'exploration_final_eps': 0.01,
+                    'learning_rate': 1e-4,
+                    'verbose': 0,
+                    'device': 'cuda',
+                    'policy_config':{
+                        'activation_fn': torch.nn.ReLU,
+                        'net_arch': [128, 64],
+                        'features_extractor_class': Baseline_CNN,
+                        'features_extractor_kwargs':{'features_dim': 512},
+                        'optimizer_class':torch.optim.Adam,
+                        'optimizer_kwargs':{'weight_decay': 1e-5},
+                        'normalize_images':False
+                    },
+                    'uvf_config':{
+                        'kwargs':{
+                        'features_extractor_class': MultiInput_CNN,
+                        }
+                    },
+                    'tp_chance':tpc,
                 }
 
                 run=wandb.init(
                     project="thesis",
-                    name=f"tpchance_b{bs}k_{epsf}_{tpc}_{rn}",
+                    name=f"uvf_b{bs}k_{tpc}_{rn}",
                     config=cf,
                     monitor_gym=True,
                     sync_tensorboard=True,
                 )
 
-                train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
+                #train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
+                
+                train_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
                 tr_eval_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(1)])
                 test_0_env_tp = DummyVecEnv([make_env_fn(test_0_config, seed=seed, rank=i) for i in range(1)])
                 test_100_env_tp = DummyVecEnv([make_env_fn(test_100_config, seed=seed, rank=i) for i in range(1)])
 
-                model = tpDQN(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
+                        #tpDQN,HERGO,DoubleDQN
+                model = HERGO(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
                                         learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
                                             target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
                                             exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
                                             max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
                                             tensorboard_log=f"runs/{run.id}/", policy_kwargs=cf['policy_config'] ,device=cf['device'],
-                                            tp_chance_start=tpc[0],tp_chance_end=tpc[1])
+                                            tp_chance=cf['tp_chance'],uvf_config=cf['uvf_config'])
 
                 eval_tr_callback = EvalCallback(tr_eval_env_tp, log_path=f"{path}/tr/{rn}/", eval_freq=(25000//num_envs),
                                             n_eval_episodes=40, deterministic=True, render=False, verbose=0)
