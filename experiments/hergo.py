@@ -19,6 +19,65 @@ from doubledqn import DoubleDQN
 from RND import RND
 from stable_baselines3 import HerReplayBuffer
 from stable_baselines3 import DQN
+from gymnasium import ObservationWrapper
+from gymnasium.wrappers import TransformObservation
+from copy import deepcopy
+from stable_baselines3.common.logger import configure
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+import torch
+from torch import nn
+from stable_baselines3.common.vec_env import DummyVecEnv
+import dill
+from four_room.old_env import FourRoomsEnv
+from four_room.wrappers import gym_wrapper
+
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+import gymnasium as gym
+class UVFWrapper(ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        self.observation_space= spaces.Dict(spaces={'observation':env.observation_space, 'achieved_goal':env.observation_space, 'desired_goal':env.observation_space})
+        return 
+
+    def observation(self, observation):
+        return {'observation':observation, 'achieved_goal':observation, 'desired_goal':np.zeros_like(observation)}
+    
+    def compute_reward(self, achieved_goal, desired_goal, info):
+        if np.array_equal(achieved_goal, desired_goal):
+            return np.array([1.0])
+        else:
+            return np.array([.0])
+
+
+class MultiInput_CNN(BaseFeaturesExtractor):
+    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 512, device=th.device("cuda")):
+        super(MultiInput_CNN, self).__init__(observation_space, features_dim)
+        self.device=device
+        # We assume CxHxW images (channels first)
+        # Re-ordering will be done by pre-preprocessing or wrapper
+        n_input_channels = observation_space['observation'].shape[0]*2
+        self.cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+        with torch.no_grad(): ##TODO needs working to actually get correct number, worst case hard code??
+            
+            n_flatten = self.cnn(torch.ones(1,n_input_channels ,*observation_space['observation'].shape[1:])).shape[1]
+        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+
+    def forward(self, observations: spaces.Dict) -> torch.Tensor:
+        if len(observations['desired_goal'].shape)<4:
+            obs=torch.cat([observations['observation'], observations['desired_goal']], axis=0).to(self.device)
+            obs=obs.unsqueeze(0)
+        else:
+            obs=torch.cat([observations['observation'], observations['desired_goal']], axis=1).to(self.device)
+        return self.linear(self.cnn(obs))
 
 SelfHERGO = TypeVar("SelfHERGO", bound="HERGO")
 
@@ -54,6 +113,7 @@ class HERGO(DoubleDQN):
         _init_setup_model: bool = True,
         #self added
         tp_chance:float=.0,
+        uvf_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(
             policy,
@@ -94,36 +154,36 @@ class HERGO(DoubleDQN):
              
         self.observation_space_size= th.prod(th.tensor(self.env.observation_space.shape))
         self.rnd= RND(self.env.observation_space.shape, device=self.device)
-
-
+        
         self.tp_chance=tp_chance
         self.num_envs= self.env.num_envs
         self.interim_goal= [None]*self.num_envs
         self.does_interim_goal= [False]*self.num_envs
         self.last_uvf_value= [0]*self.num_envs
 
-        #self.uvf_observation_space= spaces.Box(0,1,shape=(2,*self.observation_space.shape))
-        self.uvf_observation_space= spaces.Dict({'observation':self.observation_space, 'achieved_goal':self.observation_space, 'desired_goal':self.observation_space})
-        
+        uvf_kwargs= deepcopy(policy_kwargs)
+        for key in uvf_config['kwargs']:
+            uvf_kwargs[key]=uvf_config['kwargs'][key]
+
+        uvf_logger= configure()
+
         self.uvf= DoubleDQN(
-            policy,
-            env,
-            #self.uvf_observation_space,
-            #self.action_space,
+            "MultiInputPolicy",
+            UVFWrapper(self.env),
             self.lr_schedule,
             replay_buffer_class=HerReplayBuffer,
             replay_buffer_kwargs={
                 "n_sampled_goal": 4,
                 "goal_selection_strategy": "future",
             },
-            policy_kwargs=self.policy_kwargs,)
-        
+            policy_kwargs=uvf_kwargs,)
+        self.uvf.set_logger(uvf_logger)
 
     uvf_timesteps=0
     #TODO UVF still has to be included
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
         super().train(gradient_steps, batch_size)
-        
+
         #rnd trains on same batch as main policy
         observations=self.last_batch.observations
         obs=observations.view(batch_size, -1)
@@ -131,19 +191,22 @@ class HERGO(DoubleDQN):
         obs=obs.to(self.device)
         self.rnd.train(obs)   
 
-        #TODO uvf training, HER 
-        # difference to usual implementation of her is that goal and observation have same representation, so we can just use the standard replay buffer
-        # and pretend the next step is the goal? only problem is how to get to further away goals on same trajectory 
-        # 
+        #TODO UVF 
+        if self.uvf_timesteps > batch_size:
+            self.uvf.train(gradient_steps, batch_size)
 
+    def _to_dict(self, observation, desired_goal=None):
+        if isinstance(desired_goal,np.ndarray) or isinstance(desired_goal,th.Tensor):
+            des=th.tensor(desired_goal)
+        else:
+            des=th.tensor(np.zeros_like(observation))
+        return {'observation':torch.tensor(observation), 'achieved_goal':torch.tensor(observation), 'desired_goal':des}
 
 
     # list of goals if interim goal is active, else None
     interim_goal= []
-
     # list of bools, if interim goal is active
     does_interim_goal= []
-
     # list of last uvf values, to be used in collect_rollouts
     last_uvf_value=[]
 
@@ -180,22 +243,17 @@ class HERGO(DoubleDQN):
         """
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
-        self.uvf.set_training_mode(False)
+        self.uvf.policy.set_training_mode(False)
 
         num_collected_steps = 0
         num_collected_episodes = 0
 
         assert isinstance(env, VecEnv), "You must pass a VecEnv"
         assert train_freq.frequency > 0, "Should at least collect one step or episode."
-
-        main_buffer= replay_buffer
-
-        main_policy= self.policy
-        uvf_policy= self.uvf
         
         #TODO fill last_uvf_value with current uvf values
         for idx in range(env.num_envs):
-            self.last_uvf_value[idx]= uvf_policy.predict(self._last_obs[idx], self.interim_goal[idx], deterministic=False)[0]
+            self.last_uvf_value[idx]= -10
 
         if env.num_envs > 1:
             assert train_freq.unit == TrainFrequencyUnit.STEP, "You must use only one env when doing episodic training."
@@ -233,42 +291,55 @@ class HERGO(DoubleDQN):
             self._update_info_buffer(infos, dones)
 
             # TODO split into two buffers, one for main policy and one for uvf
-            # Store data in replay buffer (normalized action and unnormalized observation)
-            
-            for_uvf=np.array()
-            for_main=np.array()
-
             for idx in range(env.num_envs):
                 if self.does_interim_goal[idx]:
+                    #TODO check if goal is reached, very unlikely, unsure if valid
+                    if np.array_equal(new_obs[idx],self.interim_goal[idx]):
+                        idx_done=True
+                        idx_reward=1
+                        self.does_interim_goal[idx]= False
+                        self.interim_goal[idx]= None
+                    else:
+                        idx_done=dones[idx]
+                        idx_reward=0
 
                     # TODO: check if value function value increased since last step to figure out if goal is reached, 
                     # if so, set does_interim_goal to false etc. 
-                    current_uvf_value= max(uvf_policy.predict(new_obs[idx], self.interim_goal[idx], deterministic=False)[0])
+                    current_uvf_value=torch.max(self.uvf.q_net(self._to_dict(self._last_obs[idx], self.interim_goal[idx])).detach())
                     if current_uvf_value > self.last_uvf_value[idx]:
-                        self.last_uvf_value[idx]
+                        self.last_uvf_value[idx]= current_uvf_value
                     else: 
                         self.does_interim_goal[idx]= False
                         self.interim_goal[idx]= None
-
+                        self.last_uvf_value[idx]= -10
+                        idx_done=True
 
                     # if problems change _last_obs to new_obs with space.dict
-                    spaceDict={'observation':new_obs[idx],'achieved_goal':new_obs[idx] ,'desired_goal': self.interim_goal[idx]}
-                    
-                    #TODO check if goal is reached, very unlikely, unsure if valid
-                    if new_obs[idx]== self.interim_goal[idx]:
-                        idx_done=True
-                        idx_reward=1
-                    else:
-                        idx_done=dones[idx]
-                        idx_reward=rewards[idx]
 
-                    for_uvf.append((self.uvf.replay_buffer, spaceDict, buffer_actions[idx], idx_reward, new_obs[idx], idx_done, infos[idx]))
+                    #circumventing self._store_transition as we split up where we store based on phase of env (interim goal or not)
+                    # TODO possibly fucked, look at _stor_transition, how it handles dict 
+                        
+                    next_obs = deepcopy(new_obs[idx])
+
+                    if dones[idx] and infos[idx].get("terminal_observation") is not None:
+                        next_obs=infos[idx]["terminal_observation"]
+
+                    new_dict=self._to_dict(next_obs,self.interim_goal[idx])
+                    old_dict=self._to_dict(self._last_obs[idx],self.interim_goal[idx])
+
+                    #self._store_transition(self.uvf.replay_buffer, buffer_actions[idx], idx_reward, spaceDict, idx_done, infos[idx])  # type: ignore[arg-type]
+                    self.uvf.replay_buffer.add(old_dict, new_dict, np.array([buffer_actions[idx]]), np.array([idx_reward]), np.array([idx_done]), [infos[idx]])  # type: ignore[arg-type]
                 else:
-                    for_main.append((replay_buffer, buffer_actions[idx], rewards[idx], new_obs[idx], dones[idx], infos[idx]))
 
-            
-            self._store_transition(*for_main.transpose())  # type: ignore[arg-type]
+                    self._last_original_obs,nex_ob,rew_=self._last_obs,new_obs[idx], rewards[idx]
+                    if dones[idx] and infos[idx].get("terminal_observation") is not None:
+                        nex_ob=infos[idx]["terminal_observation"]
 
+
+                    self.replay_buffer.add(np.array([self._last_original_obs[idx]]), np.array([nex_ob]), np.array([buffer_actions[idx]]), np.array([rew_]), np.array([dones[idx]]), [infos[idx]])  # type: ignore[arg-type]
+                    #self._store_transition(replay_buffer, buffer_actions[idx], rewards[idx], new_obs[idx], dones[idx], infos[idx])  # type: ignore[arg-type]
+
+            self._last_obs = deepcopy(new_obs)
 
             self._update_current_progress_remaining(self.num_timesteps, self._total_timesteps)
 
@@ -281,14 +352,18 @@ class HERGO(DoubleDQN):
             for idx, done in enumerate(dones):
                 if done:
                     
-                    if self.does_interim_goal[idx]:
-                        self.does_interim_goal[idx]= False
-                        self.interim_goal[idx]= None
+                    if self.learning_starts < self.num_timesteps:
 
-                    self.does_interim_goal[idx]= True if np.random.rand()<self.tp_chance else False
-                    if self.does_interim_goal[idx]:
-                        self.interim_goal[idx]= self.get_interim_goal()
-                    
+                        if self.does_interim_goal[idx]:
+                            self.does_interim_goal[idx]= False
+                            self.interim_goal[idx]= None
+                            self.last_uvf_value[idx]= -10
+
+
+                        if not self.does_interim_goal[idx] and np.random.rand()<self.tp_chance:
+                            self.does_interim_goal[idx]= True
+                            self.interim_goal[idx]= self.get_interim_goal()
+
                     # Update stats
                     num_collected_episodes += 1
                     self._episode_num += 1
@@ -309,7 +384,7 @@ class HERGO(DoubleDQN):
     goal_stack=[]
     def get_interim_goal(self):
         if len(self.goal_stack) == 0:
-                replay_data = self.replay_buffer.sample(sum(self.does_interim_goal) * 3, env=self.env)  # type: ignore[union-attr]
+                replay_data = self.replay_buffer.sample(sum(self.does_interim_goal) * 3)  # type: ignore[union-attr]
                                                                                         #self._vec_normalize_env originally
                 observations=replay_data.observations
 
@@ -363,10 +438,14 @@ class HERGO(DoubleDQN):
 
             unscaled_action=np.array([None]*n_envs)
             for idx, last_obs in enumerate(self._last_obs):
-                if self.does_interim_goal[idx]:
-                    unscaled_action[idx], _= self.uvf.predict(last_obs, self.interim_goal[idx], deterministic=False)
+                if np.random.rand()<self.exploration_rate:
+                    #TODO check why tf the predict is krangled when determenistic=False
+                    unscaled_action[idx]= self.action_space.sample()
                 else:
-                    unscaled_action[idx], _= self.policy.predict(last_obs, deterministic=False)
+                    if self.does_interim_goal[idx]:
+                        unscaled_action[idx], _= self.uvf.predict(self._to_dict(last_obs, self.interim_goal[idx]), deterministic=True)
+                    else:
+                        unscaled_action[idx], _= self.policy.predict(th.Tensor(last_obs).unsqueeze(axis=0), deterministic=True)
 
         # Rescale the action from [low, high] to [-1, 1]
         if isinstance(self.action_space, spaces.Box):
@@ -388,6 +467,117 @@ class HERGO(DoubleDQN):
 
 
 if __name__ =="__main__":
-    print("HERGO testing")
-    m= HERGO("MlpPolicy","CartPole" , tp_chance_start=.0, tp_chance_end=.0)
 
+    import torch
+    from torch import nn
+    from stable_baselines3.common.vec_env import DummyVecEnv
+    import dill
+    from four_room.old_env import FourRoomsEnv
+    from four_room.wrappers import gym_wrapper
+
+    from stable_baselines3.common.monitor import Monitor
+    from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+    import gymnasium as gym
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
+
+    class Baseline_CNN(BaseFeaturesExtractor):
+        def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 512):
+            super(Baseline_CNN, self).__init__(observation_space, features_dim)
+            n_input_channels = observation_space.shape[0]
+            self.cnn = nn.Sequential(
+                nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+                nn.ReLU(),
+                nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+                nn.ReLU(),
+                nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+                nn.ReLU(),nn.Flatten(),)
+            with torch.no_grad():
+                n_flatten = self.cnn(torch.as_tensor(observation_space.sample()[None]).float()).shape[1]
+            self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+        def forward(self, observations: torch.Tensor) -> torch.Tensor:
+            if len(observations.shape) == 3:
+                observations = observations.unsqueeze(0)
+            return self.linear(self.cnn(observations))
+
+
+
+
+    def make_env_fn(config, seed: int= 0, rank: int = 0):
+        def _init():
+            env = gym_wrapper(gym.make('MiniGrid-FourRooms-v1', 
+                        agent_pos=config['agent positions'], 
+                        goal_pos=config['goal positions'], 
+                        doors_pos=config['topologies'], 
+                        agent_dir=config['agent directions']))
+            if seed==0:
+                env.reset()
+            else:
+                env.reset(seed=seed+rank)
+            return Monitor(env)
+        return _init
+
+    def make_env_fn_uvf(config, seed: int= 0, rank: int = 0):
+        def _init():
+            env = UVFWrapper(gym_wrapper(gym.make('MiniGrid-FourRooms-v1', 
+                        agent_pos=config['agent positions'], 
+                        goal_pos=config['goal positions'], 
+                        doors_pos=config['topologies'], 
+                        agent_dir=config['agent directions'])))
+            if seed==0:
+                env.reset()
+            else:
+                env.reset(seed=seed+rank)
+            return Monitor(env)
+        return _init
+
+
+    with open('./experiments/four_room/configs/fourrooms_train_config.pl', 'rb') as file:
+        train_config = dill.load(file)
+
+    train_env= DummyVecEnv([make_env_fn(train_config, seed=0, rank=0) for _ in range(1)])
+    train_uvf_env= DummyVecEnv([make_env_fn_uvf(train_config, seed=0, rank=0) for _ in range(1)])
+
+    cf={'policy': 'CnnPolicy',
+        'buffer_size': 50000,
+        'batch_size': 256,
+        'gamma': 0.99,
+        'learning_starts': 256,
+        'max_grad_norm': 1.0,
+        'gradient_steps': 1,
+        'train_freq': (10, 'step'),
+        'target_update_interval': 10,
+        'tau': 0.01,
+        'exploration_fraction': 1.0,
+        'exploration_initial_eps': 1.0,
+        'exploration_final_eps': 0.01,
+        'learning_rate': 1e-4,
+        'verbose': 1,
+        'device': 'cuda',
+        'policy_config':{
+            'activation_fn': torch.nn.ReLU,
+            'net_arch': [128, 64],
+            'features_extractor_class': Baseline_CNN,
+            'features_extractor_kwargs':{'features_dim': 512},
+            'optimizer_class':torch.optim.Adam,
+            'optimizer_kwargs':{'weight_decay': 1e-5},
+            'normalize_images':False
+        },
+        'uvf_config':{
+            'kwargs':{
+            'features_extractor_class': MultiInput_CNN,
+            }
+        },
+        'tp_chance':1.,
+    }
+
+    model = HERGO(cf['policy'], train_env, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
+                            learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
+                                target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
+                                exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
+                                max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
+                                policy_kwargs=cf['policy_config'] ,device=cf['device'], tp_chance=cf['tp_chance'],uvf_config=cf['uvf_config'])
+    
+    model.learn(500000)
