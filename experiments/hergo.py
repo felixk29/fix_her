@@ -63,7 +63,7 @@ class MultiInput_CNN(BaseFeaturesExtractor):
             nn.ReLU(),
             nn.Flatten(),
         )
-        with torch.no_grad(): ##TODO needs working to actually get correct number, worst case hard code??
+        with torch.no_grad(): 
             
             n_flatten = self.cnn(torch.ones(1,n_input_channels ,*observation_space['observation'].shape[1:])).shape[1]
         self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
@@ -147,7 +147,7 @@ class HERGO(DoubleDQN):
         if _init_setup_model:
             self._setup_model()
 
-        ### Felix part: 
+        ### Felix part:
              
         self.observation_space_size= th.prod(th.tensor(self.env.observation_space.shape))
         self.rnd= RND(self.env.observation_space.shape, device=self.device)
@@ -157,6 +157,7 @@ class HERGO(DoubleDQN):
         self.interim_goal= [None]*self.num_envs
         self.does_interim_goal= [False]*self.num_envs
         self.last_uvf_value= [0]*self.num_envs
+        self.current_uvf_steps= [0]*self.num_envs
 
         uvf_kwargs= deepcopy(policy_kwargs)
         for key in uvf_config['kwargs']:
@@ -206,6 +207,11 @@ class HERGO(DoubleDQN):
     does_interim_goal= []
     # list of last uvf values, to be used in collect_rollouts
     last_uvf_value=[]
+    # list of current uvf stepcount,
+    current_uvf_steps=[]
+    #list of tuples of historic uvf_stepcount: (idx, timestep, uvf_stepcount) #extend to start_obs,end_obs,goal_obs
+    uvf_stepcount_history=[]
+
 
     #TODO will be the bulk of the new logic, is getting called by learn()
     # generally yoinked from off_policy_algorithm.py
@@ -263,7 +269,6 @@ class HERGO(DoubleDQN):
         
         while should_collect_more_steps(train_freq, num_collected_steps, num_collected_episodes):
 
-
             if self.use_sde and self.sde_sample_freq > 0 and num_collected_steps % self.sde_sample_freq == 0:
                 # Sample a new noise matrix
                 self.actor.reset_noise(env.num_envs)
@@ -296,9 +301,15 @@ class HERGO(DoubleDQN):
                         idx_reward=1
                         self.does_interim_goal[idx]= False
                         self.interim_goal[idx]= None
+                        self.last_uvf_value[idx]= -10
+
+                        self.uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx]))
+                        self.current_uvf_steps[idx]=0
                     else:
                         idx_done=dones[idx]
                         idx_reward=0
+
+                    self.current_uvf_steps[idx]+=1
 
                     # TODO: check if value function value increased since last step to figure out if goal is reached, 
                     # if so, set does_interim_goal to false etc. 
@@ -310,6 +321,9 @@ class HERGO(DoubleDQN):
                         self.interim_goal[idx]= None
                         self.last_uvf_value[idx]= -10
                         idx_done=True
+
+                        self.uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx]))
+                        self.current_uvf_steps[idx]=0
 
                     # if problems change _last_obs to new_obs with space.dict
 

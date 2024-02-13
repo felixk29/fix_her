@@ -120,6 +120,29 @@ class ExplorationCoverageCallback(BaseCallback):
         return True
 
 
+class UVFStepCounterCallback(BaseCallback):
+    def __init__(self, log_freq, verbose=0):
+        super(UVFStepCounterCallback, self).__init__(verbose)
+        self.uvf_steps = set()
+        self.log_freq = log_freq
+
+    def _on_step(self) -> bool:
+        temp=set(self.locals['uvf_stepcount_history'])
+
+        diff=self.uvf_steps-temp
+
+
+        if self.num_timesteps % self.log_freq == 0:
+            self.logger.record('train/uvf_stepcount_mean', sum([i[2] for i in diff])/len(diff))
+            self.logger.record('train/uvf_stepcount_max', max([i[2] for i in diff]))
+            self.logger.record('train/uvf_stepcount_min', min([i[2] for i in diff]))
+            self.logger.record('train/uvf_stepcount_std', np.std([i[2] for i in diff]))
+
+        self.uvf_steps=temp
+        return True
+
+
+
 ### MultiInput_CNN for UVF ###
 device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
@@ -210,10 +233,11 @@ for rn in range(3,10):
                                         n_eval_episodes=40, deterministic=True, render=False, verbose=0)
             
             state_action_coverage_callback = ExplorationCoverageCallback(1000, 6240, 3)
+            step_counter_callback=UVFStepCounterCallback(1000)
 
             tp_wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
-            model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=[tp_wandb_callback, eval_tr_callback,eval_0_callback,eval_100_callback, state_action_coverage_callback])
+            model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=[tp_wandb_callback, step_counter_callback,eval_tr_callback,eval_0_callback,eval_100_callback, state_action_coverage_callback])
 
 
             run.finish()
