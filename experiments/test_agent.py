@@ -9,6 +9,7 @@ from gymnasium import spaces
 from hergo import HERGO, MultiInput_CNN
 print("current path: ", (os.getcwd()))
 print("Done importing!")
+import cProfile, pstats
 
 from four_room.env import FourRoomsEnv
 
@@ -18,10 +19,12 @@ gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 ### EXPERIMT SETUP BUGGY; RUN THEM SOLO
 num_envs=1
 seed=0
+PROFILING=False
 
 import dill
 from four_room.old_env import FourRoomsEnv
 from four_room.wrappers import gym_wrapper
+from four_room.utils import obs_to_state
 
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
@@ -124,21 +127,43 @@ class UVFStepCounterCallback(BaseCallback):
     def __init__(self, log_freq, verbose=0):
         super(UVFStepCounterCallback, self).__init__(verbose)
         self.uvf_steps = set()
+        self.uvf_steps_buffer=set()
         self.log_freq = log_freq
 
     def _on_step(self) -> bool:
-        temp=set(self.locals['uvf_stepcount_history'])
 
-        diff=self.uvf_steps-temp
+        new=self.locals['uvf_stepcount_history']
+
+        for i in new:
+            start=obs_to_state(i[5])
+            end=obs_to_state(i[3])
+            goal=obs_to_state(i[4])
+            dis_from_start=np.sqrt((start[0]-end[0])**2+(start[1]-end[1])**2)
+            dis_to_goal=np.sqrt((goal[0]-end[0])**2+(goal[1]-end[1])**2)
+            self.uvf_steps_buffer.add((i[0],i[1],i[2],dis_to_goal,dis_from_start))
+
+        diff=self.uvf_steps_buffer-self.uvf_steps
 
 
-        if self.num_timesteps % self.log_freq == 0:
+        if self.num_timesteps % self.log_freq == 0 and len(diff)>0:
             self.logger.record('train/uvf_stepcount_mean', sum([i[2] for i in diff])/len(diff))
+            self.logger.record('train/uvf_stepcount_median', np.median([i[2] for i in diff]))
             self.logger.record('train/uvf_stepcount_max', max([i[2] for i in diff]))
             self.logger.record('train/uvf_stepcount_min', min([i[2] for i in diff]))
-            self.logger.record('train/uvf_stepcount_std', np.std([i[2] for i in diff]))
 
-        self.uvf_steps=temp
+            self.logger.record('train/uvf_dis_end_to_goal_mean', np.mean([i[3] for i in diff]))
+            self.logger.record('train/uvf_dis_end_to_goal_median', np.median([i[3] for i in diff]))
+            self.logger.record('train/uvf_dis_end_to_goal_max', np.max([i[3] for i in diff]))
+            self.logger.record('train/uvf_dis_end_to_goal_min', np.min([i[3] for i in diff]))
+
+            self.logger.record('train/uvf_dis_start_to_end_mean', np.mean([i[4] for i in diff]))
+            self.logger.record('train/uvf_dis_start_to_end_median', np.median([i[4] for i in diff]))
+            self.logger.record('train/uvf_dis_start_to_end_max', np.max([i[4] for i in diff]))
+            self.logger.record('train/uvf_dis_start_to_end_min', np.min([i[4] for i in diff]))
+
+            self.uvf_steps.update(self.uvf_steps_buffer)
+            self.uvf_steps_buffer=set()
+
         return True
 
 
@@ -155,7 +180,7 @@ for rn in range(10):
         for tpc in [1.0]:
             eps=0.1
             print("\n------------------------------------------------")
-            print(f"Starting run {rn} with tp chance {tpc}, buffer size {bs}k")   
+            print(f"Starting run {rn} with tp chance {tpc}, buffer size {bs}k, exploration fraction of {eps}")   
             print("------------------------------------------------\n")
 
             experiment=f"hergo_b{bs}k/"
@@ -191,6 +216,11 @@ for rn in range(10):
                     'normalize_images':False
                 },
                 'uvf_config':{
+                    'buffer_size': bs*1000,
+                    'exploration_fraction': 0.5,
+                    'exploration_initial_eps': 1.0,
+                    'exploration_final_eps': 0.01,
+                    'learning_rate': 5e-4,
                     'kwargs':{
                     'features_extractor_class': MultiInput_CNN,
                     }
@@ -212,6 +242,10 @@ for rn in range(10):
             tr_eval_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(1)])
             test_0_env_tp = DummyVecEnv([make_env_fn(test_0_config, seed=seed, rank=i) for i in range(1)])
             test_100_env_tp = DummyVecEnv([make_env_fn(test_100_config, seed=seed, rank=i) for i in range(1)])
+
+            if PROFILING:
+                profiler = cProfile.Profile()
+                profiler.enable()
 
                     #tpDQN,HERGO,DoubleDQN
             model = HERGO(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
@@ -237,7 +271,14 @@ for rn in range(10):
 
             tp_wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
-            model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=[tp_wandb_callback, step_counter_callback,eval_tr_callback,eval_0_callback,eval_100_callback, state_action_coverage_callback])
+            callbacks=[tp_wandb_callback, eval_tr_callback,eval_0_callback,eval_100_callback,step_counter_callback]
+
+
+            model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=callbacks)
 
 
             run.finish()
+            if PROFILING:
+                profiler.disable()
+                stats = pstats.Stats(profiler)
+                stats.dump_stats(f"{path}/profile_{rn}.prof")

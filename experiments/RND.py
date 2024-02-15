@@ -46,7 +46,7 @@ class RND(nn.Module):
     
     def train(self, x):
         pred, target = self.forward(x)
-        loss = F.mse_loss(pred, target)
+        loss = F.l1_loss(pred, target)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
