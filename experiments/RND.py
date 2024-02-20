@@ -37,13 +37,12 @@ class RND(nn.Module):
 
         self.to(device)
 
-    #adapt this to make it not combine a whole batch into one input
     def forward(self, x):
         pred = self.predictor(x)
-        with th.no_grad():
-            target = self.target(x)
+        target = self.target(x)
         return pred, target
     
+    #
     def train(self, x):
         pred, target = self.forward(x)
         loss = F.l1_loss(pred, target)

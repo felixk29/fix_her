@@ -34,6 +34,43 @@ from four_room.wrappers import gym_wrapper
 #only for metrics 
 from four_room.utils import obs_to_state
 
+# cheating to verify something
+def samePos(a,b):
+    walls = a[2]
+    lower_right = np.array([np.where(walls.sum(axis=1) == 9)[0][0], np.where(walls.sum(axis=0) == 9)[0][0]])
+    shift = np.array([8,8]) - lower_right
+    if np.where(walls.sum(axis=1) == 9)[0][0] == 0 and np.where(walls.sum(axis=1) == 9)[0][1] == 8:
+        shift[0] = 0
+    if np.where(walls.sum(axis=0) == 9)[0][0] == 0 and np.where(walls.sum(axis=0) == 9)[0][1] == 8:
+        shift[1] = 0
+    uncentered_a = np.roll(a, tuple(shift), axis=(1,2))
+
+    walls = b[2]
+    lower_right = np.array([np.where(walls.sum(axis=1) == 9)[0][0], np.where(walls.sum(axis=0) == 9)[0][0]])
+    shift = np.array([8,8]) - lower_right
+    if np.where(walls.sum(axis=1) == 9)[0][0] == 0 and np.where(walls.sum(axis=1) == 9)[0][1] == 8:
+        shift[0] = 0
+    if np.where(walls.sum(axis=0) == 9)[0][0] == 0 and np.where(walls.sum(axis=0) == 9)[0][1] == 8:
+        shift[1] = 0
+    uncentered_b = np.roll(b, tuple(shift), axis=(1,2))
+    return np.array_equal(uncentered_a[0],uncentered_b[0])
+
+def getWalls(obs):
+    walls = obs[2]
+    lower_right = np.array([np.where(walls.sum(axis=1) == 9)[0][0], np.where(walls.sum(axis=0) == 9)[0][0]])
+    shift = np.array([8,8]) - lower_right
+    if np.where(walls.sum(axis=1) == 9)[0][0] == 0 and np.where(walls.sum(axis=1) == 9)[0][1] == 8:
+        shift[0] = 0
+    if np.where(walls.sum(axis=0) == 9)[0][0] == 0 and np.where(walls.sum(axis=0) == 9)[0][1] == 8:
+        shift[1] = 0
+    uncentered_obs = np.roll(obs, tuple(shift), axis=(1,2))
+    walls = uncentered_obs[2]
+    doors_pos = (*(np.where(walls[:, 4] == 0)[0] - np.array([1, 5])), *(np.where(walls[4, :] == 0)[0] - np.array([1, 5])))
+
+    return doors_pos
+
+
+
 
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
@@ -50,6 +87,7 @@ class UVFWrapper(ObservationWrapper):
     
     def compute_reward(self, achieved_goal, desired_goal, info):
         temp=np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
+        #temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
         return temp
 
 
@@ -172,6 +210,10 @@ class HERGO(DoubleDQN):
 
         uvf_logger= configure()
 
+        self.uvf_batch_size=uvf_config['batch_size']
+        #TODO: figure out a better solution
+        self.uvf_exploration_rate=uvf_config['exploration_rate']
+
         self.uvf= DoubleDQN(
             "MultiInputPolicy",
             UVFWrapper(self.env),
@@ -202,9 +244,8 @@ class HERGO(DoubleDQN):
 
         #TODO UVF 
         #if self.uvf.replay_buffer.full or self.uvf.replay_buffer.pos > batch_size:
-        if self.uvf_timesteps>batch_size:
-            print("Training UVF")
-            self.uvf.train(gradient_steps, batch_size)
+        if self.uvf_timesteps>self.uvf_batch_size:
+            self.uvf.train(gradient_steps, self.uvf_batch_size)
 
     def _to_dict(self, observation, desired_goal=None):
 
@@ -233,7 +274,6 @@ class HERGO(DoubleDQN):
         self.current_uvf_steps[id]=0
         self.uvf_first_obs[id]=None 
 
-    testing_flag=[False, False]
 
 
     #TODO will be the bulk of the new logic, is getting called by learn()
@@ -308,6 +348,10 @@ class HERGO(DoubleDQN):
             new_obs, rewards, dones, infos = env.step(actions)
 
             self.uvf_timesteps += sum(self.does_interim_goal)
+            saving_uvf_timesteps=self.uvf_timesteps
+            saving_total_timesteps=self.num_timesteps
+
+
             self.num_timesteps += env.num_envs
             num_collected_steps += 1            
 
@@ -323,38 +367,39 @@ class HERGO(DoubleDQN):
             # TODO split into two buffers, one for main policy and one for uvf
             for idx in range(env.num_envs):
                 if self.does_interim_goal[idx]:
-                    #TODO check if goal is reached, very unlikely, unsure if valid
+                    ### UVF PART
+
                     idx_reward=0
                     idx_done=dones[idx]
                     self.current_uvf_steps[idx]+=1
+
+
                     # TODO: improve this if possible 
                     # Version 1
                     # check if value function value increased since last step to figure out if goal is reached, 
                     # if so, set does_interim_goal to false etc. 
                     # current_uvf_value=torch.max(self.uvf.q_net(self._to_dict(self._last_obs[idx], self.interim_goal[idx])).detach())
-                    # if current_uvf_value > self.last_uvf_value[idx]:
+                    # # TODO check the term used in the np clip, its pretty arbitrary, also unsure about the val negative check or (current_uvf_value<0  and  self.last_uvf_value[idx]<0) 
+                    # if current_uvf_value > self.last_uvf_value[idx] or (self.current_uvf_steps[idx]<np.clip((35000-self.uvf_timesteps)/200,1,50)):
                     #     self.last_uvf_value[idx]= current_uvf_value
                     # else: 
                     #     idx_done=True
-                    #     uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx]))
+                    #     uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'uvf_val_decreased'))
                     #     self.reset_uvf_stat(idx)
 
-                    if not self.testing_flag[0]:
-                        print("Used UVF")
-                        self.testing_flag[0]=True
-
                     # Version 2
-                    # cheating (domain knowledge) but checking if this the problem
-                    if np.all(self.interim_goal[idx][0]==self._last_obs[idx][0]) or self.current_uvf_steps[idx]>50:
-                        uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx]))
-                        self.reset_uvf_stat(idx)
-                        idx_done=True
-
+                    # cheating (domain knowledge) but checking if this the problem (doesnt work, woul)
+                    #TODO check if goal is reached, very unlikely, unsure if valid
                     if np.array_equal(new_obs[idx],self.interim_goal[idx]):
-                        uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx]))
+                        uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'full_equal'))
                         idx_done=True
                         idx_reward=1
                         self.reset_uvf_stat(idx)
+                    elif samePos(self.interim_goal[idx],self._last_obs[idx]) or self.current_uvf_steps[idx]>50:
+                        msg='pos_equal' if self.current_uvf_steps[idx]<50 else 'max_steps'
+                        uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],msg))
+                        self.reset_uvf_stat(idx)
+                        idx_done=True
 
                     # if problems change _last_obs to new_obs with space.dict
 
@@ -370,14 +415,9 @@ class HERGO(DoubleDQN):
                     old_dict=self._to_dict(self._last_obs[idx],self.interim_goal[idx])
 
                     #self._store_transition(self.uvf.replay_buffer, buffer_actions[idx], idx_reward, spaceDict, idx_done, infos[idx])  # type: ignore[arg-type]
-                    if idx_done: print("quay")
                     self.uvf.replay_buffer.add(old_dict, new_dict, np.array([buffer_actions[idx]]), np.array([idx_reward]), np.array([idx_done]), [infos[idx]])  # type: ignore[arg-type]
                 else:
-                    if self.testing_flag[0] and not self.testing_flag[1]:
-                        print("got to other again,quay should be in between")
-                        self.testing_flag[1]=True
-
-
+                    ### NON UVF PART
                     self._last_original_obs,nex_ob,rew_=self._last_obs,new_obs[idx], rewards[idx]
                     if dones[idx] and infos[idx].get("terminal_observation") is not None:
                         nex_ob=infos[idx]["terminal_observation"]
@@ -398,18 +438,17 @@ class HERGO(DoubleDQN):
 
             for idx, done in enumerate(dones):
                 if done:
-                    
-                    if self.learning_starts < self.num_timesteps:
 
-                        if self.does_interim_goal[idx]:
-                            uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx]))
-                            self.reset_uvf_stat(idx)
+                    if self.does_interim_goal[idx]:
+                        uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'done'))
+                        self.reset_uvf_stat(idx)
 
 
-                        if not self.does_interim_goal[idx] and np.random.rand()<self.tp_chance:
-                            self.does_interim_goal[idx]= True
-                            self.interim_goal[idx]= self.get_interim_goal()
-                            self.uvf_first_obs[idx]=self._last_obs[idx]
+                    if not self.does_interim_goal[idx] and np.random.rand()<self.tp_chance:
+                        self.does_interim_goal[idx]= True
+                        start=self._last_obs[idx]
+                        self.uvf_first_obs[idx]=start
+                        self.interim_goal[idx]= self.get_interim_goal_context(start)
 
                     # Update stats
                     num_collected_episodes += 1
@@ -428,8 +467,8 @@ class HERGO(DoubleDQN):
         return RolloutReturn(num_collected_steps * env.num_envs, num_collected_episodes, continue_training)
 
     #stack of goals to not sample too often, gets refilled when empty
-    goal_stack=[]
-    def get_interim_goal(self):
+    goal_stack= []
+    def get_interim_goal_random(self):
         if len(self.goal_stack) == 0:
                 replay_data = self.replay_buffer.sample(30)  # type: ignore[union-attr]
                                                                                         #self._vec_normalize_env originally
@@ -450,6 +489,33 @@ class HERGO(DoubleDQN):
 
         return self.goal_stack.pop().reshape(self.env.observation_space.shape).cpu().numpy()
 
+
+    def get_interim_goal_context(self,obs):
+        current_state=getWalls(obs)
+        
+        potential=torch.zeros((30,4,9,9))
+        counter=0
+
+        timeout=0
+        while True:
+            data = self.replay_buffer.sample(15).observations.cpu().numpy()
+            for ob in data:
+                if getWalls(ob) == current_state:
+                    potential[counter]=th.Tensor(ob)
+                    counter+=1
+            timeout+=1
+            if counter>=3 or timeout>100:
+                break
+
+        if counter==0:
+            return self.get_interim_goal_random()
+
+        potent_obs=potential[:counter].view(counter,-1).to(self.device)
+
+        pred, target = self.rnd(potent_obs)
+        rnd_loss = F.l1_loss(pred, target, reduction='none')
+        _, indices = th.sort(rnd_loss, descending=True, axis=0)
+        return potential[indices[0].cpu()].cpu().squeeze().numpy()
 
     #TODO needs to be overhauled to work with 2 different policies, where one requires explicit goal
     def _sample_action(
@@ -485,12 +551,14 @@ class HERGO(DoubleDQN):
 
             unscaled_action=np.array([None]*n_envs)
             for idx, last_obs in enumerate(self._last_obs):
-                if np.random.rand()<self.exploration_rate:
-                    #TODO check why tf the predict is krangled when determenistic=False
-                    unscaled_action[idx]= self.action_space.sample()
-                else:
-                    if self.does_interim_goal[idx]:
+                if self.does_interim_goal[idx]:
+                    if np.random.rand()<max(self.uvf_exploration_rate, self.exploration_rate):
+                        unscaled_action[idx]= self.action_space.sample()
+                    else: 
                         unscaled_action[idx], _= self.uvf.predict(self._to_dict(last_obs, self.interim_goal[idx]), deterministic=True)
+                else:
+                    if np.random.rand()<self.exploration_rate:
+                        unscaled_action[idx]= self.action_space.sample()
                     else:
                         unscaled_action[idx], _= self.policy.predict(th.Tensor(last_obs).unsqueeze(axis=0), deterministic=True)
 
