@@ -185,7 +185,7 @@ wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
 from stable_baselines3 import HerReplayBuffer
 #for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
-for rn in range(3,10):
+for rn in range(1,10):
     for bs in [10,50,500]:
         for tpc in [1.0]:
             eps=0.1
@@ -230,8 +230,8 @@ for rn in range(3,10):
                     'exploration_fraction': 0.1,
                     'exploration_initial_eps': 1.0,
                     'exploration_final_eps': 0.01,
-                    'exploration_rate': 0.1,
-                    'learning_rate': 3e-4,
+                    'exploration_rate': 0.05,
+                    'learning_rate': 5e-4,
                     'batch_size': 512,
                     'kwargs':{
                     'features_extractor_class': MultiInput_CNN,
@@ -260,15 +260,15 @@ for rn in range(3,10):
                 profiler.enable()
 
                     #tpDQN,HERGO,DoubleDQN, RandomStart
-            model = RandomStart(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
+            model = HERGO(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
                                     learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
                                         target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
                                         exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
                                         max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
                                         tensorboard_log=f"runs/{run.id}/", policy_kwargs=cf['policy_config'] ,device=cf['device'],
                                         #tp_chance_start=cf['tp_chance'], tp_chance_end=cf['tp_chance'])  #tpdqn
-                                        #tp_chance=cf['tp_chance'],uvf_config=cf['uvf_config'])   #HERGO
-                                        random_walk_duration=30)  #RandomStart
+                                        tp_chance=cf['tp_chance'],uvf_config=cf['uvf_config'])   #HERGO
+                                        #random_walk_duration=30)  #RandomStart
 
 
             eval_tr_callback = EvalCallback(tr_eval_env_tp, log_path=f"{path}/tr/{rn}/", eval_freq=(25000//num_envs),
@@ -285,8 +285,9 @@ for rn in range(3,10):
 
             wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
-            callbacks=[wandb_callback, eval_tr_callback,eval_0_callback,eval_100_callback]
-            #callbacks+=[step_counter_callback]
+            callbacks=[wandb_callback]
+            callbacks+=[eval_tr_callback,eval_0_callback,eval_100_callback]
+            callbacks+=[step_counter_callback]
 
 
             model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=callbacks)
