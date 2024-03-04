@@ -49,7 +49,7 @@ class UVF(DoubleDQN):
         gamma: float = 0.99,
         train_freq: Union[int, Tuple[int, str]] = 4,
         gradient_steps: int = 1,
-        replay_buffer_class: Optional[Type[ReplayBuffer]] = None,
+        replay_buffer_class: Optional[Type[ReplayBuffer]] = HerReplayBuffer,
         replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
         optimize_memory_usage: bool = False,
         target_update_interval: int = 10000,
@@ -162,23 +162,33 @@ class MultiInput_CNN(BaseFeaturesExtractor):
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
             nn.Flatten(),
         )
         with torch.no_grad(): 
             
             n_flatten = self.cnn(torch.ones(1,n_input_channels ,*observation_space['observation'].shape[1:])).shape[1]
-        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+        self.linear = nn.Sequential(nn.Linear(n_flatten , features_dim), nn.ReLU())
+
 
     def forward(self, observations: spaces.Dict) -> torch.Tensor:
         if len(observations['desired_goal'].shape)<4:
-            obs=torch.cat([observations['observation'], observations['desired_goal']], axis=0).to(self.device)
-            obs=obs.unsqueeze(0)
+            obs=observations['observation'].unsqueeze(0).to(self.device)
+            goal=observations['desired_goal'].unsqueeze(0).to(self.device)
         else:
-            obs=torch.cat([observations['observation'], observations['desired_goal']], axis=1).to(self.device)
-        return self.linear(self.cnn(obs))
+            obs=observations['observation'].to(self.device)
+            goal=observations['desired_goal'].to(self.device)
 
+        # obs_cnn=self.cnn(obs)
+        # goal_cnn=self.cnn(goal)
+        # combined=torch.cat([obs_cnn,goal_cnn],axis=1)
+        
+        combined=self.cnn(torch.cat([obs,goal],axis=1))
+
+        return self.linear(combined)
+
+#TODO update to one hot encoded goal (either 2x8, or 64 array)
 class MultiInput_CNN_Goal(BaseFeaturesExtractor):
     def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 512, device=th.device("cuda")):
         super(MultiInput_CNN_Goal, self).__init__(observation_space, features_dim)
@@ -189,16 +199,16 @@ class MultiInput_CNN_Goal(BaseFeaturesExtractor):
         # input= observation(4,9,9)
         n_input_channels = observation_space['observation'].shape[0]
         self.cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.Conv2d(n_input_channels, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
             nn.Flatten(),
         )        
-        # input= goal(2,)
-        self.lin_goal=nn.Sequential(nn.Linear(2, 64), nn.ReLU())
+        # input= goal(2,) -> goal(16,) as both x and y one hot encoded
+        self.lin_goal=nn.Sequential(nn.Linear(16, 64), nn.ReLU())
 
         with torch.no_grad():
             n_flatten = self.cnn(torch.ones(1,n_input_channels,*observation_space['observation'].shape[1:])).shape[1]
@@ -206,73 +216,17 @@ class MultiInput_CNN_Goal(BaseFeaturesExtractor):
 
     def forward(self, observations: spaces.Dict) -> torch.Tensor:
         obs=observations['observation']
-
         if len(observations['observation'].shape)<4:
             obs=obs.unsqueeze(0)
 
         goal=observations['desired_goal']
+        goal_stack=torch.cat([goal[:,0,:],goal[:,1,:]],axis=1)
 
         processed_obs=self.cnn(obs)
-        processed_goal=self.lin_goal(goal)
+        processed_goal=self.lin_goal(goal_stack)
 
         return self.linear(torch.cat([processed_obs, processed_goal], axis=1))
 
-
-
-
-#for UVF tracker and everything       
-#uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],msg))
-class UVFStepCounterCallback(BaseCallback):
-    def __init__(self, log_freq, verbose=0):
-        super(UVFStepCounterCallback, self).__init__(verbose)
-        self.uvf_steps = set()
-        self.uvf_steps_buffer=set()
-        self.log_freq = log_freq
-
-    def _on_step(self) -> bool:
-
-        new=self.locals['uvf_stepcount_history']
-
-        for i in new:
-            start=obs_to_state(i[5])
-            end=obs_to_state(i[3])
-            goal=obs_to_state(i[4])
-            dis_from_start=np.sqrt((start[0]-end[0])**2+(start[1]-end[1])**2)
-            dis_to_goal=np.sqrt((goal[0]-end[0])**2+(goal[1]-end[1])**2)
-            self.uvf_steps_buffer.add((i[0],i[1],i[2],dis_to_goal,dis_from_start,i[6]))
-
-        diff=self.uvf_steps_buffer-self.uvf_steps
-
-
-        if self.num_timesteps % self.log_freq == 0 and len(diff)>0:
-            self.logger.record('uvf_metric/uvf_stepcount_mean', sum([i[2] for i in diff])/len(diff))
-            self.logger.record('uvf_metric/uvf_stepcount_median', np.median([i[2] for i in diff]))
-            self.logger.record('uvf_metric/uvf_stepcount_max', max([i[2] for i in diff]))
-            self.logger.record('uvf_metric/uvf_stepcount_min', min([i[2] for i in diff]))
-
-            self.logger.record('uvf_metric/uvf_dis_end_to_goal_mean', np.mean([i[3] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_end_to_goal_median', np.median([i[3] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_end_to_goal_max', np.max([i[3] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_end_to_goal_min', np.min([i[3] for i in diff]))
-
-            self.logger.record('uvf_metric/uvf_dis_start_to_end_mean', np.mean([i[4] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_start_to_end_median', np.median([i[4] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_start_to_end_max', np.max([i[4] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_start_to_end_min', np.min([i[4] for i in diff]))
-
-            l=[i[5] for i in diff]
-            self.logger.record('uvf_goal/uvf_done_done',l.count('done'))
-            self.logger.record('uvf_goal/uvf_done_full_equal',l.count('full_equal'))
-            self.logger.record('uvf_goal/uvf_done_uvf_val_decreased',l.count('uvf_val_decreased'))
-            self.logger.record('uvf_goal/uvf_done_max_steps',l.count('max_steps'))
-
-            self.logger.record('train/uvf_steps',self.locals['saving_uvf_timesteps'])
-            self.logger.record('train/total_steps',self.locals['saving_total_timesteps'])
-            
-            self.uvf_steps.update(self.uvf_steps_buffer)
-            self.uvf_steps_buffer=set()
-
-        return True
 
 class UVFWrapper(ObservationWrapper):
     def __init__(self, env, mode='train',direct_goal=False):
@@ -282,18 +236,22 @@ class UVFWrapper(ObservationWrapper):
 
         self.direct_goal=direct_goal
         if self.direct_goal:
-            self.observation_space= spaces.Dict(spaces={'observation':env.observation_space, 'achieved_goal':spaces.Box(low=0, high=8, shape=(2,)), 'desired_goal':spaces.Box(low=0, high=8, shape=(2,))})
+            self.observation_space= spaces.Dict(spaces={'observation':env.observation_space, 'achieved_goal':spaces.Box(low=0, high=1, shape=(2,8,)), 'desired_goal':spaces.Box(low=0, high=1, shape=(2,8,))})
         else:
             self.observation_space= spaces.Dict(spaces={'observation':env.observation_space, 'achieved_goal':env.observation_space, 'desired_goal':env.observation_space})
         self.goal=None
-        self.goal_state=None # only for test0
+        self.goal_state=None
+        self.goal_one_hot=None #either (x,y) or (x*8+y)
         self.mode=mode
+
+        self.train_env_starting_pos=[(1, 2), (1, 3), (1, 6), (1, 7), (2, 1), (2, 2), (3, 1), (3, 2), (3, 3), (3, 7), (5, 2), (5, 5), (5, 6), (5, 7), (6, 1), (6, 5), (6, 7), (7, 1), (7, 2), (7, 6)]
+
         return 
 
     def observation(self, observation):
         if self.goal is None:
             if self.direct_goal:
-                goal=np.zeros(2)
+                goal=(np.zeros(8),np.zeros(8))
             else:
                 goal=np.zeros_like(observation)
             dict_obs={'observation':observation, 'achieved_goal':observation, 'desired_goal':goal}
@@ -301,7 +259,12 @@ class UVFWrapper(ObservationWrapper):
             dict_obs={'observation':observation, 'achieved_goal':observation, 'desired_goal':self.goal}
         if self.direct_goal:
             state=obs_to_state(observation)
-            dict_obs['achieved_goal']=[state[0],state[1]]
+            x_hot=np.zeros(8)
+            y_hot=np.zeros(8)
+            x_hot[state[0]]=1
+            y_hot[state[1]]=1
+            dict_obs['achieved_goal']=[x_hot,y_hot]
+            dict_obs['desired_goal']=self.goal_one_hot
 
         return dict_obs
 
@@ -309,24 +272,38 @@ class UVFWrapper(ObservationWrapper):
         obs, i =self.env.reset(**kwargs)
         t=obs_to_state(obs)
 
+        #print(t)
+        #usable numbers: 1,2,3 5,6,7
+        #starting pos of train config: 
+
         if self.mode=='train':
-            g_x=np.random.choice([3,6])
-            g_y=np.random.choice([3,5,7])
+            s = np.random.choice(4)
+            g_x , g_y=[(3,6),(5,3),(7,4),(1,1)][s]
             self.goal_state=(g_x,g_y,*t[2:])
 
         elif self.mode=='test100':
-            g_x=np.random.choice([1,2,5,7])
-            g_y=np.random.choice([1,2,6,7])
+            s = np.random.choice(4)
+            g_x , g_y=[(3,5),(1,4),(7,3),(5,1)][s]
             self.goal_state=(g_x,g_y,*t[2:])
 
         elif self.mode=='test0':
-            g_x=np.random.choice([1,2,5,6])
-            g_y=np.random.choice([1,2,6,7])
+            
+            g_x=np.random.choice([1,2,3,5,6,7])
+            g_y=np.random.choice([1,2,3,5,6,7])
+            if g_x==t[0] and g_y==t[1]:
+                g_x=np.random.choice([1,2,3,5,6,7])
+                g_y=np.random.choice([1,2,3,5,6,7])
+
             w=tuple([np.random.choice([0,1,2]) for i in range(4)])
             self.goal_state=(g_x,g_y,*t[2:5],*w)
 
-        if self.direct_goal:
+        if self.direct_goal: 
             self.goal=[self.goal_state[0],self.goal_state[1]]
+            x_hot=np.zeros(8)
+            y_hot=np.zeros(8)
+            x_hot[self.goal[0]] = 1
+            y_hot[self.goal[1]] = 1
+            self.goal_one_hot=[x_hot,y_hot]
         else:
             self.goal=state_to_obs(self.goal_state)
 
@@ -344,7 +321,15 @@ class UVFWrapper(ObservationWrapper):
                 r=0
                 i['is_success']=np.array([0.0])
 
-        elif self.mode=='train' or self.mode=='test100':
+        elif self.mode=='train':
+            if np.array_equal(obs, self.goal):
+                r=1
+                d=True
+                i['is_success']=np.array([1.0])
+            else:
+                r=0#1/(np.linalg.norm(self.goal-obs)**2)
+                i['is_success']=np.array([0.0])
+        elif self.mode=='test100':
             if np.array_equal(obs, self.goal):
                 r=1
                 d=True
@@ -364,25 +349,20 @@ class UVFWrapper(ObservationWrapper):
         return self.observation(obs), r, d, t, i
 
     def compute_reward(self, achieved_goal, desired_goal, info):
-        print(achieved_goal, desired_goal)
         if self.direct_goal:
-            temp=np.all(achieved_goal==desired_goal, axis=1).astype(float)
-            print(sum(temp)/len(temp))
+            temp=np.all(achieved_goal==desired_goal, axis=(1,2)).astype(float)
         else:
             temp=np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
+
+            
         #temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
         return temp
     
 
 
 if __name__=="__main__":
-    ## maybe get context of current state on start and just change the player position to generate goals? 
-    ## or collect states and use them as goal library for various testcases (100% reachable, 0% reachable)
-    ## reachable/unreachable states can also be achieved by changing the observation (move walls, change goal position)
-    ## can do parameter in wrapper? that changes reset? for example, for training we set goal to the same 4-5 positions, for 100% reachable we go to any other position, 
-    ## for 0% reachable we go to any position, but also change the walls in the goal observation
     ## callbacks can maybe be made in the on_step() just have to figue out when exactly its called
-
+    from torchsummary import summary
     from four_room.env import FourRoomsEnv
     gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
     from stable_baselines3.common.monitor import Monitor
@@ -394,11 +374,16 @@ if __name__=="__main__":
     os.makedirs(base_log, exist_ok=True)
 
     ###### CONFIGS ######
+    # TODO: 
+    # - check (64,) one hot encoding
+    # - check compute_reward()
+    # - check current behaviour of agent
+    # - check different agents (TD3 or SAC or DDPG)
+    # - run RandomWalk Experiment to get data (min 5 seeds)
+
 
     num_envs=10
-    discrete_goal=True
-
-
+    discrete_goal=False
 
     with open('./experiments/four_room/configs/fourrooms_train_config.pl', 'rb') as file:
         train_config = dill.load(file)
@@ -424,12 +409,13 @@ if __name__=="__main__":
         return _init
 
 
-
     wandb.tensorboard.patch(root_logdir="./experiments/logs/")
-
     for rn in range(10):
-        for eps in [1.0,0.5,0.1]:
-            for bs in [500]:
+        for eps in [0.5,1.0]:
+            for bs in [50]:
+                # TODO:
+                # - investigate the starting positions of training in relation to goal positions of test
+                # - try it out with on ehot encoded goal
 
                 print("-------------------------------------------------------------------")
                 print(f"Starting run {rn} with epsilon {eps} and buffer size {bs}k")
@@ -443,28 +429,27 @@ if __name__=="__main__":
                     'buffer_size': bs*1000,
                     'batch_size': 256,
                     'gamma': 0.99,
-                    'learning_starts': 256,
                     'max_grad_norm': 1.0,
                     'gradient_steps': 1,
                     'train_freq': (10//num_envs, 'step'),
                     'target_update_interval': 10,
-                    'tau': 0.05,
+                    'tau': 0.01,
                     'exploration_fraction': eps,
                     'exploration_initial_eps': 1.0,
                     'exploration_final_eps': 0.01,
-                    'learning_rate': 3e-4,
+                    'learning_rate': 5e-4,
                     'verbose': 0,
                     'device': 'cuda',
                     'replay_buffer_class': HerReplayBuffer,
                     'replay_buffer_kwargs': {
-                        'n_sampled_goal': 4, 
-                        'goal_selection_strategy': 'future', 
+                        'n_sampled_goal': 6, 
+                        'goal_selection_strategy': 'episode', 
                     },
                     'policy_config':{
                         'activation_fn': torch.nn.ReLU,
                         'net_arch': [128, 64],
                         'features_extractor_class': MultiInput_CNN_Goal if discrete_goal else MultiInput_CNN,
-                        'features_extractor_kwargs':{'features_dim': 1024},
+                        'features_extractor_kwargs':{'features_dim': 512},
                         'optimizer_class':torch.optim.Adam,
                         'optimizer_kwargs':{'weight_decay': 1e-5},
                         'normalize_images':False
@@ -489,22 +474,26 @@ if __name__=="__main__":
 
                 wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
-                eval_tr_callback = EvalCallback(tr_eval_env, log_path=f"{path}/tr/{rn}/", eval_freq=(50000//num_envs),
-                                            n_eval_episodes=40, deterministic=True, render=False, verbose=0)
+                eval_tr_callback = EvalCallback(tr_eval_env, log_path=f"{path}/tr/{rn}/", eval_freq=(25000//num_envs),
+                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
-                eval_0_callback = EvalCallback(test_0_env, log_path=f"{path}/0/{rn}/", eval_freq=(50000//num_envs),
-                                            n_eval_episodes=40, deterministic=True, render=False, verbose=0)
+                eval_0_callback = EvalCallback(test_0_env, log_path=f"{path}/0/{rn}/", eval_freq=(25000//num_envs),
+                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
-                eval_100_callback = EvalCallback(test_100_env, log_path=f"{path}/100/{rn}/", eval_freq=(50000//num_envs),
-                                            n_eval_episodes=40, deterministic=True, render=False, verbose=0)
+                eval_100_callback = EvalCallback(test_100_env, log_path=f"{path}/100/{rn}/", eval_freq=(25000//num_envs),
+                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
 
-                model = UVF(cf['policy'], train_env, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
-                                        learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
-                                            target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
-                                            exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
-                                            max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
-                                            policy_kwargs=cf['policy_config'] ,device=cf['device'],tensorboard_log=f"runs/{run.id}/")
+                model = UVF(cf['policy'], train_env, replay_buffer_class=cf['replay_buffer_class'],replay_buffer_kwargs=cf['replay_buffer_kwargs'], 
+                                        buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
+                                        learning_starts=cf['batch_size']*2, gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
+                                        target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
+                                        exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
+                                        max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
+                                        policy_kwargs=cf['policy_config'] ,device=cf['device'],tensorboard_log=f"runs/{run.id}/")
+
+                
+                
 
                 model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10,callback=[wandb_callback, eval_tr_callback, eval_0_callback,eval_100_callback])
 

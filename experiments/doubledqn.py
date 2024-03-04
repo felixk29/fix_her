@@ -64,21 +64,3 @@ class DoubleDQN(DQN):
 
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
         self.logger.record("train/loss", np.mean(losses))
-
-    def learn(
-    self: SelfDoubleDQN,
-    total_timesteps: int,
-    callback: MaybeCallback = None,
-    log_interval: int = 4,
-    tb_log_name: str = "DoubleDQN",
-    reset_num_timesteps: bool = True,
-    progress_bar: bool = False,
-    ) -> SelfDoubleDQN:
-        return super().learn(
-            total_timesteps=total_timesteps,
-            callback=callback,
-            log_interval=log_interval,
-            tb_log_name=tb_log_name,
-            reset_num_timesteps=reset_num_timesteps,
-            progress_bar=progress_bar,
-        )

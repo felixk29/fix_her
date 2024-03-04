@@ -85,10 +85,10 @@ class UVFWrapper(ObservationWrapper):
         print("Used observation wrapper")
         return {'observation':observation, 'achieved_goal':observation, 'desired_goal':np.zeros_like(observation)}
     
-    def compute_reward(self, achieved_goal, desired_goal, info):
-        temp=np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
-        #temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
-        return temp
+    # def compute_reward(self, achieved_goal, desired_goal, info):
+    #     temp=np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
+    #     #temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
+    #     return temp
 
 
 class MultiInput_CNN(BaseFeaturesExtractor):
