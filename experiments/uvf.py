@@ -1,3 +1,9 @@
+### Stops depcreated warnings
+import warnings
+warnings.filterwarnings("ignore")
+
+
+
 from stable_baselines3.common.buffers import ReplayBuffer
 from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type, TypeVar, Union
 from stable_baselines3.common.type_aliases import MaybeCallback
@@ -15,6 +21,7 @@ from torch.nn import functional as F
 from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.type_aliases import GymEnv, Schedule
 from stable_baselines3.dqn.policies import DQNPolicy
+from stable_baselines3 import PPO
 from doubledqn import DoubleDQN
 from RND import RND
 from stable_baselines3 import HerReplayBuffer
@@ -32,75 +39,6 @@ from four_room.old_env import FourRoomsEnv
 from four_room.utils import obs_to_state
 from four_room.wrappers import gym_wrapper
 import gymnasium as gym
-
-SelfUVF = TypeVar("SelfUVF", bound="UVF")
-
-class UVF(DoubleDQN):
-
-    def __init__(
-        self,
-        policy: Union[str, Type[DQNPolicy]],
-        env: Union[GymEnv, str],
-        learning_rate: Union[float, Schedule] = 1e-4,
-        buffer_size: int = 1_000_000,  # 1e6
-        learning_starts: int = 50000,
-        batch_size: int = 32,
-        tau: float = 1.0,
-        gamma: float = 0.99,
-        train_freq: Union[int, Tuple[int, str]] = 4,
-        gradient_steps: int = 1,
-        replay_buffer_class: Optional[Type[ReplayBuffer]] = HerReplayBuffer,
-        replay_buffer_kwargs: Optional[Dict[str, Any]] = None,
-        optimize_memory_usage: bool = False,
-        target_update_interval: int = 10000,
-        exploration_fraction: float = 0.1,
-        exploration_initial_eps: float = 1.0,
-        exploration_final_eps: float = 0.05,
-        max_grad_norm: float = 10,
-        stats_window_size: int = 100,
-        tensorboard_log: Optional[str] = None,
-        policy_kwargs: Optional[Dict[str, Any]] = None,
-        verbose: int = 0,
-        seed: Optional[int] = None,
-        device: Union[th.device, str] = "auto",
-        _init_setup_model: bool = True,
-        #self added
-        uvf_config: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        super().__init__(
-            policy,
-            env,
-            learning_rate,
-            buffer_size,
-            learning_starts,
-            batch_size,
-            tau,
-            gamma,
-            train_freq,
-            gradient_steps,
-            replay_buffer_class=replay_buffer_class,
-            replay_buffer_kwargs=replay_buffer_kwargs,
-            policy_kwargs=policy_kwargs,
-            stats_window_size=stats_window_size,
-            tensorboard_log=tensorboard_log,
-            verbose=verbose,
-            device=device,
-            seed=seed,
-            optimize_memory_usage=optimize_memory_usage,
-        )
-
-        self.exploration_initial_eps = exploration_initial_eps
-        self.exploration_final_eps = exploration_final_eps
-        self.exploration_fraction = exploration_fraction
-        self.target_update_interval = target_update_interval
-        # For updating the target network with multiple envs:
-        self._n_calls = 0
-        self.max_grad_norm = max_grad_norm
-        # "epsilon" for the epsilon-greedy exploration
-        self.exploration_rate = 0.0
-
-        if _init_setup_model:
-            self._setup_model()
     
 def state_to_obs(state):
     """
@@ -162,7 +100,7 @@ class MultiInput_CNN(BaseFeaturesExtractor):
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
-            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
             nn.Flatten(),
         )
@@ -170,6 +108,7 @@ class MultiInput_CNN(BaseFeaturesExtractor):
             
             n_flatten = self.cnn(torch.ones(1,n_input_channels ,*observation_space['observation'].shape[1:])).shape[1]
         self.linear = nn.Sequential(nn.Linear(n_flatten , features_dim), nn.ReLU())
+        # self.linear = nn.Sequential(nn.Linear(n_flatten *2, features_dim), nn.ReLU())
 
 
     def forward(self, observations: spaces.Dict) -> torch.Tensor:
@@ -187,45 +126,6 @@ class MultiInput_CNN(BaseFeaturesExtractor):
         combined=self.cnn(torch.cat([obs,goal],axis=1))
 
         return self.linear(combined)
-
-#TODO update to one hot encoded goal (either 2x8, or 64 array)
-class MultiInput_CNN_Goal(BaseFeaturesExtractor):
-    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 512, device=th.device("cuda")):
-        super(MultiInput_CNN_Goal, self).__init__(observation_space, features_dim)
-        self.device=device
-        # We assume CxHxW images (channels first)
-        # Re-ordering will be done by pre-preprocessing or wrapper
-        
-        # input= observation(4,9,9)
-        n_input_channels = observation_space['observation'].shape[0]
-        self.cnn = nn.Sequential(
-            nn.Conv2d(n_input_channels, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
-            nn.ReLU(),
-            nn.Flatten(),
-        )        
-        # input= goal(2,) -> goal(16,) as both x and y one hot encoded
-        self.lin_goal=nn.Sequential(nn.Linear(16, 64), nn.ReLU())
-
-        with torch.no_grad():
-            n_flatten = self.cnn(torch.ones(1,n_input_channels,*observation_space['observation'].shape[1:])).shape[1]
-        self.linear = nn.Sequential(nn.Linear(n_flatten + 64, features_dim), nn.ReLU())
-
-    def forward(self, observations: spaces.Dict) -> torch.Tensor:
-        obs=observations['observation']
-        if len(observations['observation'].shape)<4:
-            obs=obs.unsqueeze(0)
-
-        goal=observations['desired_goal']
-        goal_stack=torch.cat([goal[:,0,:],goal[:,1,:]],axis=1)
-
-        processed_obs=self.cnn(obs)
-        processed_goal=self.lin_goal(goal_stack)
-
-        return self.linear(torch.cat([processed_obs, processed_goal], axis=1))
 
 
 class UVFWrapper(ObservationWrapper):
@@ -277,8 +177,11 @@ class UVFWrapper(ObservationWrapper):
         #starting pos of train config: 
 
         if self.mode=='train':
-            s = np.random.choice(4)
-            g_x , g_y=[(3,6),(5,3),(7,4),(1,1)][s]
+            g_x=np.random.choice([1,2,3,5,6,7])
+            g_y=np.random.choice([1,2,3,5,6,7])
+            if (g_x==t[0] and g_y==t[1]) or (g_x==t[3] and g_y==t[4]):
+                g_x=np.random.choice([1,2,3,5,6,7])
+                g_y=np.random.choice([1,2,3,5,6,7])
             self.goal_state=(g_x,g_y,*t[2:])
 
         elif self.mode=='test100':
@@ -357,7 +260,64 @@ class UVFWrapper(ObservationWrapper):
             
         #temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
         return temp
+
+from stable_baselines3.common.callbacks import BaseCallback
+import seaborn as sns
+import matplotlib.pyplot as plt
+from time import time
+class heatmapCallback(BaseCallback):
+    def __init__(self, save_dir:str= './experiments/logs/heatmaps', log_freq:int=100000, verbose=0, id:str=""):
+        super(heatmapCallback,self).__init__(verbose)
+        self.log_freq=log_freq
+        self.save_dir=save_dir
+        self.id=id
+        self.dir_dict={0:'→',1:'↓',2:'←',3:'↑',-1:'G',-2:'X',-3:' '}
+
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps % self.log_freq == 0:
+            tik=time()
+            nr=self.num_timesteps//self.log_freq
+            heatmap,annot=self.calculateHeatmap()
+
+            max_val=np.max(heatmap)*1.05
+            min_val=np.min(heatmap[heatmap>-90])
+            min_val=min_val/2 if min_val>0 else min_val
+            sns.heatmap(heatmap,annot=annot,fmt='',vmin=min_val,vmax=max_val)
+            plt.savefig(f"{self.save_dir}/heatmap{self.id}_{nr}.png")
+            plt.clf()
+            print(f"Heatmap generated. Took {round(time()-tik,2)}s")
+        
+        return True
     
+    def calculateHeatmap(self):
+        nn=self.locals['self'].q_net
+        goal=self.locals['self']._last_obs['desired_goal'][0]
+        
+        env=obs_to_state(goal)
+        walls=env[-4:] # walls are up down left right range= 0,1,2 
+
+        heatmap=np.zeros((9,9,4))-100
+
+        for y in range(1,8):
+            for x in range(1,8):
+                if (x==4 or y==4) and not ((x,y) in [(4,1+walls[0]),(4,5+walls[1]),(1+walls[2],4),(5+walls[3],4)]):
+                    continue #checks so only doorways are calculated
+
+                for dir in range(4): # dir 0-3 : right down left up 
+                    obs=state_to_obs((x,y,dir,*env[3:]))
+                    dic={'observation':th.Tensor(obs),'achieved_goal':th.Tensor(obs),'desired_goal':th.Tensor(goal)}
+
+                    heatmap[y,x,dir]=th.max(nn(dic)).cpu().detach().item()
+        
+        values_2d=np.max(heatmap,axis=2)
+        annot=np.argmax(heatmap,axis=2)
+        annot[values_2d==-100]=-3
+        annot[env[4],env[3]]=-2
+        annot[env[1],env[0]]=-1
+        annot=np.array([self.dir_dict[i] for i in annot.reshape((81))]).reshape((9,9))
+
+        return values_2d,annot
 
 
 if __name__=="__main__":
@@ -373,7 +333,6 @@ if __name__=="__main__":
     base_log = "./experiments/logs/"
     os.makedirs(base_log, exist_ok=True)
 
-    ###### CONFIGS ######
     # TODO: 
     # - check (64,) one hot encoding
     # - check compute_reward()
@@ -381,6 +340,7 @@ if __name__=="__main__":
     # - check different agents (TD3 or SAC or DDPG)
     # - run RandomWalk Experiment to get data (min 5 seeds)
 
+    ###### CONFIGS ######
 
     num_envs=10
     discrete_goal=False
@@ -408,11 +368,11 @@ if __name__=="__main__":
             return Monitor(env)
         return _init
 
-
     wandb.tensorboard.patch(root_logdir="./experiments/logs/")
-    for rn in range(10):
-        for eps in [0.5,1.0]:
-            for bs in [50]:
+    for rn in range(5,10):
+        for eps in [0.0]:
+            for bs in [10,50,500]:
+
                 # TODO:
                 # - investigate the starting positions of training in relation to goal positions of test
                 # - try it out with on ehot encoded goal
@@ -434,22 +394,22 @@ if __name__=="__main__":
                     'train_freq': (10//num_envs, 'step'),
                     'target_update_interval': 10,
                     'tau': 0.01,
-                    'exploration_fraction': eps,
+                    'exploration_fraction': 0.5,
                     'exploration_initial_eps': 1.0,
-                    'exploration_final_eps': 0.01,
-                    'learning_rate': 5e-4,
+                    'exploration_final_eps': 0.1,
+                    'learning_rate': 3e-4,
                     'verbose': 0,
                     'device': 'cuda',
                     'replay_buffer_class': HerReplayBuffer,
                     'replay_buffer_kwargs': {
-                        'n_sampled_goal': 6, 
-                        'goal_selection_strategy': 'episode', 
+                        'n_sampled_goal': 32, 
+                        'goal_selection_strategy': 'future', 
                     },
                     'policy_config':{
                         'activation_fn': torch.nn.ReLU,
-                        'net_arch': [128, 64],
-                        'features_extractor_class': MultiInput_CNN_Goal if discrete_goal else MultiInput_CNN,
-                        'features_extractor_kwargs':{'features_dim': 512},
+                        'net_arch': [512 ,64],
+                        'features_extractor_class': MultiInput_CNN,
+                        'features_extractor_kwargs':{'features_dim': 1024},
                         'optimizer_class':torch.optim.Adam,
                         'optimizer_kwargs':{'weight_decay': 1e-5},
                         'normalize_images':False
@@ -464,13 +424,13 @@ if __name__=="__main__":
                     sync_tensorboard=True,
                 )
 
-
+                # TODO: Implement test case where both walking environment as well as target environment are different
                 #for non discrete goals, change to train_config on all, to show that complicated goal representation works 
                 #(or actually just keep it train_config, as the uvf will only work on those door positions anyway (as its only used during training)
                 train_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i) for i in range(num_envs)])
                 tr_eval_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i)for i in range(1)])
-                test_0_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i,mode='test100') for i in range(1)])
-                test_100_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i,mode='test0') for i in range(1)])
+                test_0_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i,mode='test0') for i in range(1)])
+                test_100_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i,mode='test100') for i in range(1)])
 
                 wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
@@ -481,21 +441,19 @@ if __name__=="__main__":
                                             n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
                 eval_100_callback = EvalCallback(test_100_env, log_path=f"{path}/100/{rn}/", eval_freq=(25000//num_envs),
-                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
+                                            n_eval_episodes=4, deterministic=True, render=False, verbose=0)
 
+                heatmapping=heatmapCallback(log_freq=100000,id=f"bs{bs}ep{round(eps*10)}rn{rn}")
 
-                model = UVF(cf['policy'], train_env, replay_buffer_class=cf['replay_buffer_class'],replay_buffer_kwargs=cf['replay_buffer_kwargs'], 
+                model = DQN(cf['policy'], train_env, replay_buffer_class=cf['replay_buffer_class'],replay_buffer_kwargs=cf['replay_buffer_kwargs'], 
                                         buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
                                         learning_starts=cf['batch_size']*2, gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
                                         target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
                                         exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
                                         max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
-                                        policy_kwargs=cf['policy_config'] ,device=cf['device'],tensorboard_log=f"runs/{run.id}/")
+                                        policy_kwargs=cf['policy_config'] ,device=cf['device'],tensorboard_log=f"runs/{run.id}/")                
 
-                
-                
-
-                model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10,callback=[wandb_callback, eval_tr_callback, eval_0_callback,eval_100_callback])
+                model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10,callback=[wandb_callback, eval_tr_callback, eval_0_callback,eval_100_callback,heatmapping])
 
                 run.finish()
                 ## adapt rollout to make sure that reaching env goal doesnt give a reward, but reaching the uvf goal does
