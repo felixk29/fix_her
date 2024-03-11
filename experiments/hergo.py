@@ -86,10 +86,7 @@ class UVFWrapper(ObservationWrapper):
         return {'observation':observation, 'achieved_goal':observation, 'desired_goal':np.zeros_like(observation)}
 
     def compute_reward(self, achieved_goal, desired_goal, info):
-        if self.direct_goal:
-            temp=np.all(achieved_goal==desired_goal, axis=(1,2)).astype(float)
-        else:
-            temp=np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
+        temp=np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
 
         #temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
         return temp
@@ -167,7 +164,6 @@ class HERGO(DoubleDQN):
         _init_setup_model: bool = True,
         #self added
         tp_chance:float=.0,
-        uvf_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__(
             policy,
@@ -220,7 +216,7 @@ class HERGO(DoubleDQN):
         uvf_logger= configure()
 
         #TODO: figure out a better solution
-        uvf_cf={
+        self.uvf_cf={
             'buffer_size': buffer_size,
             'batch_size': batch_size,
             'gamma': 0.99,
@@ -240,7 +236,7 @@ class HERGO(DoubleDQN):
                 'n_sampled_goal': 32, 
                 'goal_selection_strategy': 'future', 
             },
-            'policy_config':{
+            'policy_kwargs':{
                 'activation_fn': torch.nn.ReLU,
                 'net_arch': [512 ,64],
                 'features_extractor_class': MultiInput_CNN,
@@ -250,7 +246,7 @@ class HERGO(DoubleDQN):
                 'normalize_images':False
             },
         }
-        self.uvf= DoubleDQN('MultiInputPolicy', UVFWrapper(self.env), *cf)     
+        self.uvf= DoubleDQN('MultiInputPolicy', UVFWrapper(self.env), **self.uvf_cf)     
         # self.uvf= DoubleDQN(
         #     "MultiInputPolicy",
         #     UVFWrapper(self.env),
@@ -281,8 +277,9 @@ class HERGO(DoubleDQN):
 
         #TODO UVF 
         #if self.uvf.replay_buffer.full or self.uvf.replay_buffer.pos > batch_size:
-        if self.uvf_timesteps>self.uvf_batch_size:
-            self.uvf.train(gradient_steps, self.uvf_batch_size)
+        if self.uvf_timesteps>self.uvf_cf['batch_size']:
+            for i in range(3):
+                self.uvf.train(gradient_steps, self.uvf_cf['batch_size'])
 
     def _to_dict(self, observation, desired_goal=None):
 
@@ -415,14 +412,14 @@ class HERGO(DoubleDQN):
                     # Version 1
                     # check if value function value increased since last step to figure out if goal is reached, 
                     # if so, set does_interim_goal to false etc. 
-                    # current_uvf_value=torch.max(self.uvf.q_net(self._to_dict(self._last_obs[idx], self.interim_goal[idx])).detach())
-                    # # TODO check the term used in the np clip, its pretty arbitrary, also unsure about the val negative check or (current_uvf_value<0  and  self.last_uvf_value[idx]<0) 
-                    # if current_uvf_value > self.last_uvf_value[idx] or (self.current_uvf_steps[idx]<np.clip((35000-self.uvf_timesteps)/200,1,50)):
-                    #     self.last_uvf_value[idx]= current_uvf_value
-                    # else: 
-                    #     idx_done=True
-                    #     uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'uvf_val_decreased'))
-                    #     self.reset_uvf_stat(idx)
+                    current_uvf_value=torch.max(self.uvf.q_net(self._to_dict(self._last_obs[idx], self.interim_goal[idx])).detach())
+                    # TODO check the term used in the np clip, its pretty arbitrary, also unsure about the val negative check or (current_uvf_value<0  and  self.last_uvf_value[idx]<0) 
+                    if current_uvf_value > self.last_uvf_value[idx] or (self.current_uvf_steps[idx]<np.clip((35000-self.uvf_timesteps)/200,1,50)):
+                        self.last_uvf_value[idx]= current_uvf_value
+                    else: 
+                        idx_done=True
+                        uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'uvf_val_decreased'))
+                        self.reset_uvf_stat(idx)
 
                     # Version 2
                     # cheating (domain knowledge) but checking if this the problem (doesnt work, woul)
@@ -432,8 +429,10 @@ class HERGO(DoubleDQN):
                         idx_done=True
                         idx_reward=1
                         self.reset_uvf_stat(idx)
-                    elif samePos(self.interim_goal[idx],self._last_obs[idx]) or self.current_uvf_steps[idx]>50:
-                        msg='pos_equal' if self.current_uvf_steps[idx]<50 else 'max_steps'
+                    elif self.current_uvf_steps[idx]>50:
+                        #samePos(self.interim_goal[idx],self._last_obs[idx]) or
+                        #msg='pos_equal' if self.current_uvf_steps[idx]<50 else 'max_steps'
+                        msg='max_steps'
                         uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],msg))
                         self.reset_uvf_stat(idx)
                         idx_done=True
@@ -589,7 +588,7 @@ class HERGO(DoubleDQN):
             unscaled_action=np.array([None]*n_envs)
             for idx, last_obs in enumerate(self._last_obs):
                 if self.does_interim_goal[idx]:
-                    if np.random.rand()<max(self.uvf_exploration_rate, self.exploration_rate):
+                    if np.random.rand()<max(self.uvf_cf['exploration_final_eps'], self.exploration_rate):
                         unscaled_action[idx]= self.action_space.sample()
                     else: 
                         unscaled_action[idx], _= self.uvf.predict(self._to_dict(last_obs, self.interim_goal[idx]), deterministic=True)
@@ -692,8 +691,7 @@ if __name__ =="__main__":
     train_env= DummyVecEnv([make_env_fn(train_config, seed=0, rank=0) for _ in range(1)])
     train_uvf_env= DummyVecEnv([make_env_fn_uvf(train_config, seed=0, rank=0) for _ in range(1)])
 
-    cf={'policy': 'CnnPolicy',
-        'buffer_size': 50000,
+    cf={'buffer_size': 50000,
         'batch_size': 256,
         'gamma': 0.99,
         'learning_starts': 256,
@@ -708,7 +706,7 @@ if __name__ =="__main__":
         'learning_rate': 1e-4,
         'verbose': 1,
         'device': 'cuda',
-        'policy_config':{
+        'policy_kwargs':{
             'activation_fn': torch.nn.ReLU,
             'net_arch': [128, 64],
             'features_extractor_class': Baseline_CNN,
@@ -717,19 +715,9 @@ if __name__ =="__main__":
             'optimizer_kwargs':{'weight_decay': 1e-5},
             'normalize_images':False
         },
-        'uvf_config':{
-            'kwargs':{
-            'features_extractor_class': MultiInput_CNN,
-            }
-        },
         'tp_chance':1.,
     }
 
-    model = HERGO(cf['policy'], train_env, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
-                            learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
-                                target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
-                                exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
-                                max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
-                                policy_kwargs=cf['policy_config'] ,device=cf['device'], tp_chance=cf['tp_chance'],uvf_config=cf['uvf_config'])
+    model = HERGO('CnnPolicy', train_env, **cf)
     
     model.learn(500000)

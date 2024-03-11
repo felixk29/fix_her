@@ -147,20 +147,20 @@ class UVFStepCounterCallback(BaseCallback):
 
 
         if self.num_timesteps % self.log_freq == 0 and len(diff)>0:
-            self.logger.record('uvf_metric/uvf_stepcount_mean', sum([i[2] for i in diff])/len(diff))
-            self.logger.record('uvf_metric/uvf_stepcount_median', np.median([i[2] for i in diff]))
-            self.logger.record('uvf_metric/uvf_stepcount_max', max([i[2] for i in diff]))
-            self.logger.record('uvf_metric/uvf_stepcount_min', min([i[2] for i in diff]))
+            self.logger.record('uvf_stepcount/uvf_stepcount_mean', sum([i[2] for i in diff])/len(diff))
+            self.logger.record('uvf_stepcount/uvf_stepcount_median', np.median([i[2] for i in diff]))
+            self.logger.record('uvf_stepcount/uvf_stepcount_max', max([i[2] for i in diff]))
+            self.logger.record('uvf_stepcount/uvf_stepcount_min', min([i[2] for i in diff]))
 
-            self.logger.record('uvf_metric/uvf_dis_end_to_goal_mean', np.mean([i[3] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_end_to_goal_median', np.median([i[3] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_end_to_goal_max', np.max([i[3] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_end_to_goal_min', np.min([i[3] for i in diff]))
+            self.logger.record('uvf_end_goal/uvf_dis_end_to_goal_mean', np.mean([i[3] for i in diff]))
+            self.logger.record('uvf_end_goal/uvf_dis_end_to_goal_median', np.median([i[3] for i in diff]))
+            self.logger.record('uvf_end_goal/uvf_dis_end_to_goal_max', np.max([i[3] for i in diff]))
+            self.logger.record('uvf_end_goal/uvf_dis_end_to_goal_min', np.min([i[3] for i in diff]))
 
-            self.logger.record('uvf_metric/uvf_dis_start_to_end_mean', np.mean([i[4] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_start_to_end_median', np.median([i[4] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_start_to_end_max', np.max([i[4] for i in diff]))
-            self.logger.record('uvf_metric/uvf_dis_start_to_end_min', np.min([i[4] for i in diff]))
+            self.logger.record('uvf_start_end/uvf_dis_start_to_end_mean', np.mean([i[4] for i in diff]))
+            self.logger.record('uvf_start_end/uvf_dis_start_to_end_median', np.median([i[4] for i in diff]))
+            self.logger.record('uvf_start_end/uvf_dis_start_to_end_max', np.max([i[4] for i in diff]))
+            self.logger.record('uvf_start_end/uvf_dis_start_to_end_min', np.min([i[4] for i in diff]))
 
             l=[i[5] for i in diff]
             self.logger.record('uvf_goal/uvf_done_done',l.count('done'))
@@ -186,23 +186,19 @@ np.random.seed(49123)
 
 from stable_baselines3 import HerReplayBuffer
 #for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
-for rn in range(5,10):
-    for bs in [10,50,500]:
-        for tpc in [0.0,1.0]:
-            eps=0.1
+for rn in range(5):
+    for bs in [500]:
+        for tpc in [1.0]:
+            eps=0.5
             print("\n------------------------------------------------")
             print(f"Starting run {rn} with tp chance {tpc}, buffer size {bs}k, exploration fraction of {eps}")   
             print("------------------------------------------------\n")
 
             experiment=f"random_b{bs}k/"
 
-            if eps==1.0:
-                path=base_log+f"{experiment}/{tpc}"
-            else:
-                path=base_log+f"{experiment}/{tpc}_e{round(eps*100)}"
-
-            cf={'policy': 'CnnPolicy',
-                'buffer_size': bs*1000,
+            
+            path=base_log+f"{experiment}/{tpc}_e{round(eps*100)}"
+            cf={'buffer_size': bs*1000,
                 'batch_size': 256,
                 'gamma': 0.99,
                 'learning_starts': 256,
@@ -217,7 +213,7 @@ for rn in range(5,10):
                 'learning_rate': 1e-4,
                 'verbose': 0,
                 'device': 'cuda',
-                'policy_config':{
+                'policy_kwargs':{
                     'activation_fn': torch.nn.ReLU,
                     'net_arch': [128, 64],
                     'features_extractor_class': Baseline_CNN,
@@ -226,28 +222,18 @@ for rn in range(5,10):
                     'optimizer_kwargs':{'weight_decay': 1e-5},
                     'normalize_images':False
                 },
-                'uvf_config':{
-                    'buffer_size': bs*1000,
-                    'exploration_fraction': 0.1,
-                    'exploration_initial_eps': 1.0,
-                    'exploration_final_eps': 0.01,
-                    'exploration_rate': 0.05,
-                    'learning_rate': 1e-4,
-                    'batch_size': 512,
-                    'kwargs':{
-                    'features_extractor_class': MultiInput_CNN,
-                    }
-                },
                 'tp_chance':tpc,
             }
 
             run=wandb.init(
                 project="thesis",
-                name=f"rnd_b{bs}k_{tpc}_{rn}",
+                entity='felix-kaubek',
+                name=f"hergo_b{bs}k_{tpc}_{rn}",
                 config=cf,
                 monitor_gym=True,
                 sync_tensorboard=True,
             )
+            cf['tensorboard_log']=f"runs/{run.id}/"
 
             #train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
             
@@ -262,25 +248,20 @@ for rn in range(5,10):
 
                     #tpDQN,HERGO,DoubleDQN, RandomStart
             random_steps= -1 if tpc==0.0 else tpc*30
-            model = RandomStart(cf['policy'], train_env_tp, buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
-                                    learning_starts=cf['learning_starts'], gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
-                                        target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
-                                        exploration_initial_eps=cf['exploration_initial_eps'], exploration_final_eps=cf['exploration_final_eps'],
-                                        max_grad_norm=cf['max_grad_norm'], learning_rate=cf['learning_rate'], verbose=cf['verbose'],
-                                        tensorboard_log=f"runs/{run.id}/", policy_kwargs=cf['policy_config'] ,device=cf['device'],
+            model = HERGO('CnnPolicy', train_env_tp, **cf)
                                         #tp_chance_start=cf['tp_chance'], tp_chance_end=cf['tp_chance'])  #tpdqn
-                                        #tp_chance=cf['tp_chance'],uvf_config=cf['uvf_config'])   #HERGO
-                                        random_walk_duration=random_steps)  #RandomStart
+                                        #tp_chance=cf['tp_chance'])   #HERGO
+                                        #random_walk_duration=random_steps)  #RandomStart
 
 
-            eval_tr_callback = EvalCallback(tr_eval_env_tp, log_path=f"{path}/tr/{rn}/", eval_freq=(25000//num_envs),
-                                        n_eval_episodes=40, deterministic=True, render=False, verbose=0)
+            eval_tr_callback = EvalCallback(tr_eval_env_tp, log_path=f"{path}/tr/{rn}/", eval_freq=(50000//num_envs),
+                                        n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
-            eval_0_callback = EvalCallback(test_0_env_tp, log_path=f"{path}/0/{rn}/", eval_freq=(25000//num_envs),
-                                        n_eval_episodes=40, deterministic=True, render=False, verbose=0)
+            eval_0_callback = EvalCallback(test_0_env_tp, log_path=f"{path}/0/{rn}/", eval_freq=(50000//num_envs),
+                                        n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
-            eval_100_callback = EvalCallback(test_100_env_tp, log_path=f"{path}/100/{rn}/", eval_freq=(25000//num_envs),
-                                        n_eval_episodes=40, deterministic=True, render=False, verbose=0)
+            eval_100_callback = EvalCallback(test_100_env_tp, log_path=f"{path}/100/{rn}/", eval_freq=(50000//num_envs),
+                                        n_eval_episodes=20, deterministic=True, render=False, verbose=0)
             
             state_action_coverage_callback = ExplorationCoverageCallback(1000, 6240, 3)
             step_counter_callback=UVFStepCounterCallback(1000)
@@ -289,7 +270,7 @@ for rn in range(5,10):
 
             callbacks=[wandb_callback]
             callbacks+=[eval_tr_callback,eval_0_callback,eval_100_callback]
-            #callbacks+=[step_counter_callback]
+            callbacks+=[step_counter_callback]
 
 
             model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=callbacks)
