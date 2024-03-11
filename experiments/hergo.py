@@ -84,12 +84,15 @@ class UVFWrapper(ObservationWrapper):
     def observation(self, observation):
         print("Used observation wrapper")
         return {'observation':observation, 'achieved_goal':observation, 'desired_goal':np.zeros_like(observation)}
-    
-    # def compute_reward(self, achieved_goal, desired_goal, info):
-    #     temp=np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
-    #     #temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
-    #     return temp
 
+    def compute_reward(self, achieved_goal, desired_goal, info):
+        if self.direct_goal:
+            temp=np.all(achieved_goal==desired_goal, axis=(1,2)).astype(float)
+        else:
+            temp=np.all(achieved_goal==desired_goal, axis=(1,2,3)).astype(float)
+
+        #temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
+        return temp
 
 class MultiInput_CNN(BaseFeaturesExtractor):
     def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 512, device=th.device("cuda")):
@@ -110,15 +113,25 @@ class MultiInput_CNN(BaseFeaturesExtractor):
         with torch.no_grad(): 
             
             n_flatten = self.cnn(torch.ones(1,n_input_channels ,*observation_space['observation'].shape[1:])).shape[1]
-        self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+        self.linear = nn.Sequential(nn.Linear(n_flatten , features_dim), nn.ReLU())
+        # self.linear = nn.Sequential(nn.Linear(n_flatten *2, features_dim), nn.ReLU())
+
 
     def forward(self, observations: spaces.Dict) -> torch.Tensor:
         if len(observations['desired_goal'].shape)<4:
-            obs=torch.cat([observations['observation'], observations['desired_goal']], axis=0).to(self.device)
-            obs=obs.unsqueeze(0)
+            obs=observations['observation'].unsqueeze(0).to(self.device)
+            goal=observations['desired_goal'].unsqueeze(0).to(self.device)
         else:
-            obs=torch.cat([observations['observation'], observations['desired_goal']], axis=1).to(self.device)
-        return self.linear(self.cnn(obs))
+            obs=observations['observation'].to(self.device)
+            goal=observations['desired_goal'].to(self.device)
+
+        # obs_cnn=self.cnn(obs)
+        # goal_cnn=self.cnn(goal)
+        # combined=torch.cat([obs_cnn,goal_cnn],axis=1)
+        
+        combined=self.cnn(torch.cat([obs,goal],axis=1))
+
+        return self.linear(combined)
 
 SelfHERGO = TypeVar("SelfHERGO", bound="HERGO")
 
@@ -192,7 +205,7 @@ class HERGO(DoubleDQN):
             self._setup_model()
 
         ### Felix part:
-             
+        
         self.observation_space_size= th.prod(th.tensor(self.env.observation_space.shape))
         self.rnd= RND(self.env.observation_space.shape, device=self.device)
         
@@ -204,30 +217,54 @@ class HERGO(DoubleDQN):
         self.current_uvf_steps= [0]*self.num_envs
         self.uvf_first_obs= [None]*self.num_envs
 
-        uvf_kwargs= deepcopy(policy_kwargs)
-        for key in uvf_config['kwargs']:
-            uvf_kwargs[key]=uvf_config['kwargs'][key]
-
         uvf_logger= configure()
 
-        self.uvf_batch_size=uvf_config['batch_size']
         #TODO: figure out a better solution
-        self.uvf_exploration_rate=uvf_config['exploration_rate']
-
-        self.uvf= DoubleDQN(
-            "MultiInputPolicy",
-            UVFWrapper(self.env),
-            learning_rate=uvf_config['learning_rate'],
-            buffer_size=uvf_config['buffer_size'],
-            exploration_fraction=uvf_config['exploration_fraction'],
-            exploration_initial_eps=uvf_config['exploration_initial_eps'],
-            exploration_final_eps=uvf_config['exploration_final_eps'],
-            replay_buffer_class=HerReplayBuffer,
-            replay_buffer_kwargs={
-                "n_sampled_goal": 4,
-                "goal_selection_strategy": "future",
+        uvf_cf={
+            'buffer_size': buffer_size,
+            'batch_size': batch_size,
+            'gamma': 0.99,
+            'max_grad_norm': 1.0,
+            'gradient_steps': 1,
+            'train_freq': (10//1, 'step'),
+            'target_update_interval': 10,
+            'tau': 0.01,
+            'exploration_fraction': 0.5,
+            'exploration_initial_eps': 1.0,
+            'exploration_final_eps': 0.1,
+            'learning_rate': 3e-4,
+            'verbose': 0,
+            'device': 'cuda',
+            'replay_buffer_class': HerReplayBuffer,
+            'replay_buffer_kwargs': {
+                'n_sampled_goal': 32, 
+                'goal_selection_strategy': 'future', 
             },
-            policy_kwargs=uvf_kwargs,)
+            'policy_config':{
+                'activation_fn': torch.nn.ReLU,
+                'net_arch': [512 ,64],
+                'features_extractor_class': MultiInput_CNN,
+                'features_extractor_kwargs':{'features_dim': 1024},
+                'optimizer_class':torch.optim.Adam,
+                'optimizer_kwargs':{'weight_decay': 1e-5},
+                'normalize_images':False
+            },
+        }
+        self.uvf= DoubleDQN('MultiInputPolicy', UVFWrapper(self.env), *cf)     
+        # self.uvf= DoubleDQN(
+        #     "MultiInputPolicy",
+        #     UVFWrapper(self.env),
+        #     learning_rate=uvf_config['learning_rate'],
+        #     buffer_size=uvf_config['buffer_size'],
+        #     exploration_fraction=uvf_config['exploration_fraction'],
+        #     exploration_initial_eps=uvf_config['exploration_initial_eps'],
+        #     exploration_final_eps=uvf_config['exploration_final_eps'],
+        #     replay_buffer_class=HerReplayBuffer,
+        #     replay_buffer_kwargs={
+        #         "n_sampled_goal": 4,
+        #         "goal_selection_strategy": "future",
+        #     },
+            # policy_kwargs=uvf_kwargs,)
         self.uvf.set_logger(uvf_logger)
 
     uvf_timesteps=0
