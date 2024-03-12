@@ -182,11 +182,10 @@ class UVFStepCounterCallback(BaseCallback):
 device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 wandb.tensorboard.patch(root_logdir="./experiments/logs/")
-np.random.seed(49123)
 
 from stable_baselines3 import HerReplayBuffer
 #for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
-for rn in range(5):
+for rn in range(3,5):
     for bs in [500]:
         for tpc in [1.0]:
             eps=0.5

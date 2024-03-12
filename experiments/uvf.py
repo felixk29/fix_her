@@ -369,7 +369,7 @@ if __name__=="__main__":
         return _init
 
     wandb.tensorboard.patch(root_logdir="./experiments/logs/")
-    for rn in range(5,10):
+    for rn in range(10):
         for eps in [0.0]:
             for bs in [10,50,500]:
 
@@ -418,6 +418,7 @@ if __name__=="__main__":
 
                 run=wandb.init(
                     project="thesis",
+                    entity='felix-kaubek',
                     name=f"pure_uve_b{bs}k_{rn}",
                     config=cf,
                     monitor_gym=True,
@@ -445,7 +446,7 @@ if __name__=="__main__":
 
                 heatmapping=heatmapCallback(log_freq=100000,id=f"bs{bs}ep{round(eps*10)}rn{rn}")
 
-                model = DQN(cf['policy'], train_env, replay_buffer_class=cf['replay_buffer_class'],replay_buffer_kwargs=cf['replay_buffer_kwargs'], 
+                model = DoubleDQN(cf['policy'], train_env, replay_buffer_class=cf['replay_buffer_class'],replay_buffer_kwargs=cf['replay_buffer_kwargs'], 
                                         buffer_size=cf['buffer_size'], batch_size=cf['batch_size'], gamma=cf['gamma'], 
                                         learning_starts=cf['batch_size']*2, gradient_steps=cf['gradient_steps'], train_freq=cf['train_freq'],
                                         target_update_interval=cf['target_update_interval'], tau=cf['tau'], exploration_fraction=cf['exploration_fraction'],
