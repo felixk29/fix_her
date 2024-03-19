@@ -185,15 +185,15 @@ wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
 from stable_baselines3 import HerReplayBuffer
 #for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
-for rn in range(3,5):
+for rn in range(8,10):
     for bs in [500]:
-        for tpc in [1.0]:
+        for tpc in [0.0,1.0]:
             eps=0.5
             print("\n------------------------------------------------")
             print(f"Starting run {rn} with tp chance {tpc}, buffer size {bs}k, exploration fraction of {eps}")   
             print("------------------------------------------------\n")
 
-            experiment=f"random_b{bs}k/"
+            experiment=f"hergo_b{bs}k/"
 
             
             path=base_log+f"{experiment}/{tpc}_e{round(eps*100)}"

@@ -219,6 +219,7 @@ class HERGO(DoubleDQN):
         self.uvf_cf={
             'buffer_size': buffer_size,
             'batch_size': batch_size,
+            'learning_starts': batch_size*2,
             'gamma': 0.99,
             'max_grad_norm': 1.0,
             'gradient_steps': 1,
@@ -247,20 +248,6 @@ class HERGO(DoubleDQN):
             },
         }
         self.uvf= DoubleDQN('MultiInputPolicy', UVFWrapper(self.env), **self.uvf_cf)     
-        # self.uvf= DoubleDQN(
-        #     "MultiInputPolicy",
-        #     UVFWrapper(self.env),
-        #     learning_rate=uvf_config['learning_rate'],
-        #     buffer_size=uvf_config['buffer_size'],
-        #     exploration_fraction=uvf_config['exploration_fraction'],
-        #     exploration_initial_eps=uvf_config['exploration_initial_eps'],
-        #     exploration_final_eps=uvf_config['exploration_final_eps'],
-        #     replay_buffer_class=HerReplayBuffer,
-        #     replay_buffer_kwargs={
-        #         "n_sampled_goal": 4,
-        #         "goal_selection_strategy": "future",
-        #     },
-            # policy_kwargs=uvf_kwargs,)
         self.uvf.set_logger(uvf_logger)
 
     uvf_timesteps=0
@@ -278,7 +265,7 @@ class HERGO(DoubleDQN):
         #TODO UVF 
         #if self.uvf.replay_buffer.full or self.uvf.replay_buffer.pos > batch_size:
         if self.uvf_timesteps>self.uvf_cf['batch_size']:
-            for i in range(3):
+            for _ in range(2):
                 self.uvf.train(gradient_steps, self.uvf_cf['batch_size'])
 
     def _to_dict(self, observation, desired_goal=None):
@@ -412,30 +399,38 @@ class HERGO(DoubleDQN):
                     # Version 1
                     # check if value function value increased since last step to figure out if goal is reached, 
                     # if so, set does_interim_goal to false etc. 
-                    current_uvf_value=torch.max(self.uvf.q_net(self._to_dict(self._last_obs[idx], self.interim_goal[idx])).detach())
-                    # TODO check the term used in the np clip, its pretty arbitrary, also unsure about the val negative check or (current_uvf_value<0  and  self.last_uvf_value[idx]<0) 
-                    if current_uvf_value > self.last_uvf_value[idx] or (self.current_uvf_steps[idx]<np.clip((35000-self.uvf_timesteps)/200,1,50)):
-                        self.last_uvf_value[idx]= current_uvf_value
-                    else: 
-                        idx_done=True
-                        uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'uvf_val_decreased'))
-                        self.reset_uvf_stat(idx)
+                    # current_uvf_value=torch.max(self.uvf.q_net(self._to_dict(self._last_obs[idx], self.interim_goal[idx])).detach())
+                    # # TODO check the term used in the np clip, its pretty arbitrary, also unsure about the val negative check or (current_uvf_value<0  and  self.last_uvf_value[idx]<0) 
+                    # if current_uvf_value > self.last_uvf_value[idx] or (self.current_uvf_steps[idx]<np.clip((35000-self.uvf_timesteps)/200,1,50)):
+                    #     self.last_uvf_value[idx]= current_uvf_value
+                    # else: 
+                    #     idx_done=True
+                    #     uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'uvf_val_decreased'))
+                    #     self.reset_uvf_stat(idx)
 
                     # Version 2
                     # cheating (domain knowledge) but checking if this the problem (doesnt work, woul)
                     #TODO check if goal is reached, very unlikely, unsure if valid
-                    if np.array_equal(new_obs[idx],self.interim_goal[idx]):
-                        uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'full_equal'))
-                        idx_done=True
-                        idx_reward=1
-                        self.reset_uvf_stat(idx)
-                    elif self.current_uvf_steps[idx]>50:
-                        #samePos(self.interim_goal[idx],self._last_obs[idx]) or
-                        #msg='pos_equal' if self.current_uvf_steps[idx]<50 else 'max_steps'
+                    # if np.array_equal(new_obs[idx],self.interim_goal[idx]):
+                    #     uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],'full_equal'))
+                    #     idx_done=True
+                    #     idx_reward=1
+                    #     self.reset_uvf_stat(idx)
+                    # elif self.current_uvf_steps[idx]>50:
+                    #     #samePos(self.interim_goal[idx],self._last_obs[idx]) or
+                    #     #msg='pos_equal' if self.current_uvf_steps[idx]<50 else 'max_steps'
+                    #     msg='max_steps'
+                    #     uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],msg))
+                    #     self.reset_uvf_stat(idx)
+                    #     idx_done=True
+                    
+                    ## ALWAYS go certain steps TODO: change to total_timesteps_dependend
+                    if self.current_uvf_steps[idx]==40:
                         msg='max_steps'
                         uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],msg))
                         self.reset_uvf_stat(idx)
                         idx_done=True
+
 
                     # if problems change _last_obs to new_obs with space.dict
 
