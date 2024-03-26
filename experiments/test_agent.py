@@ -20,6 +20,8 @@ gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 num_envs=1
 seed=0
 PROFILING=False
+LOGGING=False
+
 
 import dill
 from four_room.old_env import FourRoomsEnv
@@ -180,20 +182,20 @@ class UVFStepCounterCallback(BaseCallback):
 
 ### MultiInput_CNN for UVF ###
 device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
 wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
 from stable_baselines3 import HerReplayBuffer
 #for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
 for rn in range(8,10):
-    for bs in [500]:
-        for tpc in [0.0,1.0]:
+    for bs in [10,50,500]:
+        for tpc in [0,5,15,30]:
+
             eps=0.5
             print("\n------------------------------------------------")
             print(f"Starting run {rn} with tp chance {tpc}, buffer size {bs}k, exploration fraction of {eps}")   
             print("------------------------------------------------\n")
 
-            experiment=f"hergo_b{bs}k/"
+            experiment=f"random_b{bs}k/"
 
             
             path=base_log+f"{experiment}/{tpc}_e{round(eps*100)}"
@@ -221,18 +223,20 @@ for rn in range(8,10):
                     'optimizer_kwargs':{'weight_decay': 1e-5},
                     'normalize_images':False
                 },
-                'tp_chance':tpc,
+                'random_walk_duration':tpc,
             }
 
-            run=wandb.init(
-                project="thesis",
-                entity='felix-kaubek',
-                name=f"hergo_b{bs}k_{tpc}_{rn}",
-                config=cf,
-                monitor_gym=True,
-                sync_tensorboard=True,
-            )
-            cf['tensorboard_log']=f"runs/{run.id}/"
+
+            if LOGGING:
+                run=wandb.init(
+                    project="thesis",
+                    entity='felix-kaubek',
+                    name=f"hergo_b{bs}k_{tpc}_{rn}",
+                    config=cf,
+                    monitor_gym=True,
+                    sync_tensorboard=True,
+                )
+                cf['tensorboard_log']=f"runs/{run.id}/"
 
             #train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
             
@@ -246,8 +250,7 @@ for rn in range(8,10):
                 profiler.enable()
 
                     #tpDQN,HERGO,DoubleDQN, RandomStart
-            random_steps= -1 if tpc==0.0 else tpc*30
-            model = HERGO('CnnPolicy', train_env_tp, **cf)
+            model = RandomStart('CnnPolicy', train_env_tp, **cf)
                                         #tp_chance_start=cf['tp_chance'], tp_chance_end=cf['tp_chance'])  #tpdqn
                                         #tp_chance=cf['tp_chance'])   #HERGO
                                         #random_walk_duration=random_steps)  #RandomStart
@@ -265,17 +268,19 @@ for rn in range(8,10):
             state_action_coverage_callback = ExplorationCoverageCallback(1000, 6240, 3)
             step_counter_callback=UVFStepCounterCallback(1000)
 
-            wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
+            callbacks=[]
 
-            callbacks=[wandb_callback]
+            if LOGGING:
+                callbacks+=[WandbCallback(log='all', gradient_save_freq=1000)]
+
             callbacks+=[eval_tr_callback,eval_0_callback,eval_100_callback]
-            callbacks+=[step_counter_callback]
+            #callbacks+=[step_counter_callback]
 
 
             model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=callbacks)
 
-
-            run.finish()
+            if LOGGING:
+                run.finish()
             if PROFILING:
                 profiler.disable()
                 stats = pstats.Stats(profiler)

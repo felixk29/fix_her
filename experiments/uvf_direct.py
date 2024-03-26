@@ -33,8 +33,6 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, RolloutReturn, Schedule, TrainFreq, TrainFrequencyUnit
 from stable_baselines3.common.type_aliases import MaybeCallback
-from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type, TypeVar, Union
-from stable_baselines3.common.buffers import ReplayBuffer
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -88,40 +86,26 @@ def state_to_obs(state):
 
 
 class MultiInput_CNN(BaseFeaturesExtractor):
-    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 512, device=th.device("cuda"),hyper=True):
+    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 512, device=th.device("cuda")):
         super(MultiInput_CNN, self).__init__(observation_space, features_dim)
         self.device = device
-        self.hyper=hyper
         # We assume CxHxW images (channels first)
         # Re-ordering will be done by pre-preprocessing or wrapper
-        n_input_channels = observation_space['observation'].shape[0]
-        self.cnn_obs = nn.Sequential(
-            nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+        n_input_channels = observation_space['observation'].shape[0]*2
+        self.cnn = nn.Sequential(
+            nn.Conv2d(n_input_channels, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
-            nn.ReLU(),
-            nn.Flatten(),
-        )
-
-
-        self.cnn_goal = nn.Sequential(
-            nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
             nn.Flatten(),
         )
-
 
         with torch.no_grad():
-            n_flatten = self.cnn_obs(torch.ones(
-                1, n_input_channels, *observation_space['observation'].shape[1:])).shape[1]
-        self.linear = nn.Sequential(nn.Linear(n_flatten if hyper else n_flatten*2, features_dim), nn.ReLU())
-
+            n_flatten = self.cnn(torch.ones(1, n_input_channels, *observation_space['observation'].shape[1:])).shape[1]
+            self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())
+        # self.linear = nn.Sequential(nn.Linear(n_flatten *2, features_dim), nn.ReLU())
 
     def forward(self, observations: spaces.Dict) -> torch.Tensor:
         if len(observations['desired_goal'].shape) < 4:
@@ -131,13 +115,7 @@ class MultiInput_CNN(BaseFeaturesExtractor):
             obs = observations['observation'].to(self.device)
             goal = observations['desired_goal'].to(self.device)
 
-        #mini batchify (each batch should be 4 or 8 big)
-
-        obs_cnn=self.cnn_obs(obs)
-        goal_cnn=self.cnn_goal(goal)
-        
-        combined=obs_cnn*goal_cnn if self.hyper else th.cat([obs_cnn,goal_cnn],dim=1)
-        combined=F.relu(combined)
+        combined = self.cnn(torch.cat([obs, goal],dim=1))
 
         return self.linear(combined)
 
@@ -150,19 +128,15 @@ class UVFWrapper(ObservationWrapper):
         super().__init__(env)
 
         self.direct_goal = direct_goal
-        if self.direct_goal:
-            self.observation_space = spaces.Dict(spaces={'observation': env.observation_space, 'achieved_goal': spaces.Box(
-                low=0, high=1, shape=(2, 8,)), 'desired_goal': spaces.Box(low=0, high=1, shape=(2, 8,))})
-        else:
-            self.observation_space = spaces.Dict(
-                spaces={'observation': env.observation_space, 'achieved_goal': env.observation_space, 'desired_goal': env.observation_space})
+
+        self.action_space = spaces.Discrete(4) # direct action
+
+        self.observation_space = spaces.Dict(spaces={'observation': env.observation_space, 'achieved_goal': env.observation_space, 'desired_goal': env.observation_space})
         self.goal = None
         self.goal_state = None
-        self.goal_one_hot = None  # either (x,y) or (x*8+y)
         self.mode = mode
 
-        self.train_env_starting_pos = [(1, 2), (1, 3), (1, 6), (1, 7), (2, 1), (2, 2), (3, 1), (3, 2), (
-            3, 3), (3, 7), (5, 2), (5, 5), (5, 6), (5, 7), (6, 1), (6, 5), (6, 7), (7, 1), (7, 2), (7, 6)]
+        self.train_env_starting_pos = [(1, 2), (1, 3), (1, 6), (1, 7), (2, 1), (2, 2), (3, 1), (3, 2), (3, 3), (3, 7), (5, 2), (5, 5), (5, 6), (5, 7), (6, 1), (6, 5), (6, 7), (7, 1), (7, 2), (7, 6)]
         self.train_context = [(7, 6, 0, 1, 2, 1), (2, 7, 1, 0, 0, 1), (2, 2, 0, 0, 1, 2), (2, 1, 0, 1, 1, 1), (6, 6, 0, 2, 0, 1), (6, 3, 2, 1, 2, 1), (3, 2, 2, 0, 1, 0), (3, 3, 2, 1, 0, 2),
                               (1, 6, 0, 2, 0, 2), (6, 1, 1, 1, 1, 0), (5, 5, 1, 1, 1, 1), (7, 6, 2, 0, 2, 1), (6, 1, 1, 1, 2, 1), (5, 3, 0, 0, 1, 1), (3, 7, 2, 2, 0, 0), (3, 6, 1, 2, 1, 1),
                               (2, 3, 1, 2, 0, 1), (2, 3, 1, 1, 0, 2), (3, 5, 1, 0, 1, 0), (2, 6, 2, 1, 1, 2), (7, 2, 1, 2, 0, 0), (1, 2, 1, 0, 2, 2), (6, 5, 1, 2, 2, 2), (5, 6, 0, 2, 0, 0),
@@ -181,17 +155,9 @@ class UVFWrapper(ObservationWrapper):
         else:
             dict_obs = {'observation': observation,
                         'achieved_goal': observation, 'desired_goal': self.goal}
-        if self.direct_goal:
-            state = obs_to_state(observation)
-            x_hot = np.zeros(8)
-            y_hot = np.zeros(8)
-            x_hot[state[0]] = 1
-            y_hot[state[1]] = 1
-            dict_obs['achieved_goal'] = [x_hot, y_hot]
-            dict_obs['desired_goal'] = self.goal_one_hot
 
         return dict_obs
-
+       
     def reset(self, **kwargs):
         obs, i = self.env.reset(**kwargs)
         t = obs_to_state(obs)
@@ -206,16 +172,10 @@ class UVFWrapper(ObservationWrapper):
         elif self.mode == 'test0':
             self.goal_state = self.generate_goal(t, True)
 
-        if self.direct_goal:
-            self.goal = [self.goal_state[0], self.goal_state[1]]
-            x_hot = np.zeros(8)
-            y_hot = np.zeros(8)
-            x_hot[self.goal[0]] = 1
-            y_hot[self.goal[1]] = 1
-            self.goal_one_hot = [x_hot, y_hot]
-        else:
-            self.goal = state_to_obs(self.goal_state)
 
+        self.goal = state_to_obs(self.goal_state)
+
+        self.last_obs = obs
         return self.observation(obs), i
 
     def generate_goal(self, state, test=False):
@@ -238,36 +198,39 @@ class UVFWrapper(ObservationWrapper):
                 goal_state = self.generate_goal(state, test)
         return goal_state
 
-    def step(self, action):
-        obs, r, d, t, i = self.env.step(action)
-        if self.direct_goal:
-            state = obs_to_state(obs)
-            if state[0] == self.goal_state[0] and state[1] == self.goal_state[1]:
-                r = 1
-                d = True
-                i['is_success'] = np.array([1.0])
-            else:
-                r = 0
-                i['is_success'] = np.array([0.0])
+    def get_direction(self, obs):
+            if obs[1, 4, 5] == 1:
+                return 0
+            if obs[1, 5, 4] == 1:
+                return 1
+            if obs[1, 4, 3] == 1:
+                return 2
+            if obs[1, 3, 4] == 1:
+                return 3
+        
+    # 0: right, 1: down, 2: left, 3: up
 
-        elif self.mode == 'train':
-            if np.array_equal(obs, self.goal):
+    def step(self, action):
+
+        direction=self.get_direction(self.last_obs)
+        while action!=direction:
+            self.env.step_count-=1
+            self.last_obs, r, d,t, i = self.env.step(0)
+            direction=self.get_direction(self.last_obs)
+        
+        obs, r, d,t, i = self.env.step(2)
+        self.last_obs = obs
+
+        if self.mode == 'train':
+            if np.array_equal(obs[[0,2,3]], self.goal[[0,2,3]]):
                 r = 1
                 d = True
                 i['is_success'] = np.array([1.0])
             else:
                 r = 0  # 1/(np.linalg.norm(self.goal-obs)**2)
                 i['is_success'] = np.array([0.0])
-        elif self.mode == 'test100':
-            if np.array_equal(obs, self.goal):
-                r = 1
-                d = True
-                i['is_success'] = np.array([1.0])
-            else:
-                r = 0
-                i['is_success'] = np.array([0.0])
         elif self.mode == 'test0':
-            if obs_to_state(obs)[:3] == self.goal_state[:3]:
+            if obs_to_state(obs)[:2] == self.goal_state[:2]:
                 r = 1
                 d = True
                 i['is_success'] = np.array([1.0])
@@ -278,12 +241,8 @@ class UVFWrapper(ObservationWrapper):
         return self.observation(obs), r, d, t, i
 
     def compute_reward(self, achieved_goal, desired_goal, info):
-        if self.direct_goal:
-            temp = np.all(achieved_goal == desired_goal,
-                          axis=(1, 2)).astype(float)
-        else:
-            temp = np.all(achieved_goal == desired_goal,
-                          axis=(1, 2, 3)).astype(float)
+
+        temp = np.all(achieved_goal == desired_goal,axis=(1, 2, 3)).astype(float)
 
         # temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
         return temp
@@ -396,21 +355,21 @@ if __name__ == "__main__":
         return _init
 
     # wandb.tensorboard.patch(root_logdir="./experiments/logs/")
-    for rn in range(90,99):
-        for eps in [0.0]:#,0.9]:
+    for rn in range(10):
+        for eps in [0.5]:#,0.9]:
             for bs in [50,500]:
 
                 print("-------------------------------------------------------------------")
                 print(f"Starting run {rn} with epsilon {eps} and buffer size {bs}k")
                 print("-------------------------------------------------------------------")
 
-                experiment = f"pure_uvf_b{bs}k/"
+                experiment = f"direct_uvf_b{bs}k/"
 
                 path = base_log+f"{experiment}/{round(eps*100)}"
 
                 dqn_cf={'buffer_size': bs*1000,
                     'batch_size': 256,
-                    'learning_starts':512,
+                    'learning_starts':256*2,
                     'gamma': 0.99,
                     'max_grad_norm': 1.0,
                     'gradient_steps': 1,
@@ -419,7 +378,7 @@ if __name__ == "__main__":
                     'tau': 0.01,
                     'exploration_fraction': 0.5,
                     'exploration_initial_eps': 1.0,
-                    'exploration_final_eps': 0.01,
+                    'exploration_final_eps': 0.1,
                     'learning_rate': 3e-4,
                     'verbose': 0,
                     'device': 'cuda',
@@ -430,40 +389,14 @@ if __name__ == "__main__":
                     },
                     'policy_kwargs':{
                         'activation_fn': torch.nn.ReLU,
-                        'net_arch': [256 ,64],
+                        'net_arch': [512 ,64],
                         'features_extractor_class': MultiInput_CNN,
-                        'features_extractor_kwargs':{'features_dim': 512,
-                                                     'hyper':True},
+                        'features_extractor_kwargs':{'features_dim': 1024},
                         'optimizer_class':torch.optim.Adam,
                         'optimizer_kwargs':{'weight_decay': 1e-5},
                         'normalize_images':False
                     },
                 }
-
-
-                # ppo_cf = {
-                #     'her_val':eps,
-                #     'learning_rate': 3e-4,
-                #     'n_steps': 256, ## will be multiplied with num_envs
-                #     'batch_size': 256,
-                #     'n_epochs': 10,
-                #     'clip_range': 0.15,
-
-                #     # # TODO add HER replay buffer as extension of DictRolloutBuffer
-                #     # 'rollout_buffer_class': HerRolloutBuffer,
-                #     # 'rollout_buffer_kwargs': {
-                #     #     'her_ratio':eps
-                #     #     },
-                #     'policy_kwargs': {
-                #         'activation_fn': torch.nn.ReLU,
-                #         'net_arch': [512, 64],
-                #         'features_extractor_class': MultiInput_CNN,
-                #         'features_extractor_kwargs': {'features_dim': 1024},
-                #         'optimizer_class': torch.optim.Adam,
-                #         'optimizer_kwargs': {'weight_decay': 1e-5},
-                #         'normalize_images': False
-                #     },
-                # }
 
                 # run=wandb.init(
                 #     project="thesis",
@@ -477,14 +410,10 @@ if __name__ == "__main__":
                 # TODO: Implement test case where both walking environment as well as target environment are different
                 # for non discrete goals, change to train_config on all, to show that complicated goal representation works
                 # (or actually just keep it train_config, as the uvf will only work on those door positions anyway (as its only used during training)
-                train_env = DummyVecEnv(
-                    [make_env_fn(train_config, seed=0, rank=i) for i in range(num_envs)])
-                tr_eval_env = DummyVecEnv(
-                    [make_env_fn(train_config, seed=0, rank=i)for i in range(1)])
-                test_0_env = DummyVecEnv(
-                    [make_env_fn(train_config, seed=0, rank=i, mode='test0') for i in range(1)])
-                test_100_env = DummyVecEnv(
-                    [make_env_fn(train_config, seed=0, rank=i) for i in range(1)])
+                train_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i) for i in range(num_envs)])
+                tr_eval_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i)for i in range(1)])
+                test_0_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i, mode='test0') for i in range(1)])
+                test_100_env = DummyVecEnv([make_env_fn(train_config, seed=0, rank=i) for i in range(1)])
 
                 # wandb_callback=WandbCallback(log='all', gradient_save_freq=1000)
 
@@ -500,7 +429,6 @@ if __name__ == "__main__":
                 # heatmapping=heatmapCallback(log_freq=100000,id=f"bs{bs}ep{round(eps*10)}rn{rn}")
 
                 model = DoubleDQN('MultiInputPolicy', train_env, **dqn_cf)#, tensorboard_log=f"runs/{run.id}/")
-
 
                 model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=[
                             eval_tr_callback, eval_0_callback, eval_100_callback])
