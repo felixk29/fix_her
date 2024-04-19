@@ -1,14 +1,38 @@
-from typing import TypeVar
-from stable_baselines3.common.type_aliases import MaybeCallback
-import numpy as np
 import torch as th
-from torch.nn import functional as F
+import numpy as np 
 from stable_baselines3 import DQN
+from RND import RND
+from typing import Union, Callable
+from torch.nn import functional as F
 
-SelfDoubleDQN = TypeVar("SelfDoubleDQN", bound="DoubleDQN")
+# RND-DQN
+# DoubleDQN that extends DQN and uses RND as intrinsic reward instead of epsilon-greedy
 
-class DoubleDQN(DQN):
-    last_batch=None
+class RND_DQN(DQN):
+    def __init__(self,**kwargs):
+        self.beta_arg =  kwargs.pop('beta', None)  
+        super(RND_DQN, self).__init__(**kwargs)
+        self.rnd = RND(self.observation_space.shape, device=self.device)
+
+    def beta(self):
+        total_timesteps=500000
+        if self.beta_arg is None:
+            return 0.1
+
+        if isinstance(self.beta_arg, float):
+            return self.beta_arg
+        
+        if len(self.beta_arg) == 2:
+            return self.beta_arg[0] + (self.beta_arg[1] - self.beta_arg[0]) * self._n_updates / total_timesteps
+
+        if len(self.beta_arg) == 3:
+            return self.beta_arg[0] + (self.beta_arg[1] - self.beta_arg[0]) * min(1, self._n_updates / (total_timesteps * self.beta_arg[2]))
+
+        return self.beta_arg
+        
+    def intrinsic_reward(self, state: th.Tensor):
+        pred, target = self.rnd(state)
+        return th.mean((pred - target).pow(2), dim=1).detach().cpu().numpy()
 
     def train(self, gradient_steps: int, batch_size: int = 100) -> None:
         # Switch to train mode (this affects batch norm / dropout)
@@ -19,12 +43,17 @@ class DoubleDQN(DQN):
         losses = []
         for _ in range(gradient_steps):
 
-            # Sample replay bufferr
-
+            # Sample replay buffer
             replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
             self.last_batch=replay_data
+
             # Do not backpropagate gradient to the target network
             with th.no_grad():
+
+                #calculate intrinsic rewards
+                intrinsic_rewards = self.intrinsic_reward(replay_data.observations)
+                intrinsic_rewards = th.FloatTensor(intrinsic_rewards).to(self.device)
+
                 # Compute the next Q-values using the target network
                 next_q_values = self.q_net_target(replay_data.next_observations)
                 # Decouple action selection from value estimation
@@ -34,11 +63,10 @@ class DoubleDQN(DQN):
                 next_actions_online = th.argmax(next_q_values_online, dim=1)
                 # Estimate the q-values for the selected actions using target q network
                 next_q_values = th.gather(next_q_values, dim=1, index=next_actions_online.unsqueeze(1)).squeeze(1)
-               
                 # 1-step TD target
-                target_q_values = replay_data.rewards.squeeze()+self.gamma*next_q_values*(1-replay_data.dones).squeeze()
+                target_q_values = (replay_data.rewards.squeeze() +self.beta()*intrinsic_rewards).flatten()+self.gamma*next_q_values*(1-replay_data.dones).flatten()
 
-                # #
+
             # Get current Q-values estimates
             current_q_values = self.q_net(replay_data.observations)
 
@@ -58,6 +86,8 @@ class DoubleDQN(DQN):
             # Clip gradient norm
             th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
             self.policy.optimizer.step()
+
+            self.rnd.train(replay_data.observations)
 
         # Increase update counter
         self._n_updates += gradient_steps

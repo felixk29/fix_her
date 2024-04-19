@@ -18,6 +18,7 @@ from doubledqn import DoubleDQN
 
 SelfRandomStart = TypeVar("SelfRandomStart", bound="RandomStart")
 
+
 class RandomStart(DoubleDQN):
 
     def __init__(
@@ -81,6 +82,8 @@ class RandomStart(DoubleDQN):
         self.max_grad_norm = max_grad_norm
         # "epsilon" for the epsilon-greedy exploration
         self.exploration_rate = 0.0
+
+        self.random_steps=0
 
         if _init_setup_model:
             self._setup_model()
@@ -155,7 +158,7 @@ class RandomStart(DoubleDQN):
             num_collected_steps += 1
             ### Modification:
             self.current_random_steps= [x+1 for x in self.current_random_steps]
-
+            random_steps=self.random_steps
             # Give access to local variables
             callback.update_locals(locals())
             # Only stop training if return value is False, not when it is None.
@@ -232,13 +235,11 @@ class RandomStart(DoubleDQN):
 
             unscaled_action=np.array([None]*n_envs)
             for idx, last_obs in enumerate(self._last_obs):
-                if self.current_random_steps[idx]<self.random_walk_duration:
+                if self.current_random_steps[idx]<self.random_walk_duration or np.random.rand()<self.exploration_rate:
+                    self.random_steps+=1
                     unscaled_action[idx]= self.action_space.sample()
                 else:
-                    if np.random.rand()<self.exploration_rate:
-                        unscaled_action[idx]= self.action_space.sample()
-                    else:
-                        unscaled_action[idx], _= self.policy.predict(th.Tensor(last_obs).unsqueeze(axis=0), deterministic=True)
+                    unscaled_action[idx], _= self.policy.predict(th.Tensor(last_obs).unsqueeze(axis=0), deterministic=True)
 
         # Rescale the action from [low, high] to [-1, 1]
         if isinstance(self.action_space, spaces.Box):
