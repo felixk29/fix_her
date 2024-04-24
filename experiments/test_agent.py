@@ -121,9 +121,9 @@ wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 from stable_baselines3 import HerReplayBuffer
 #for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
 if __name__ == "__main__":
-    for rn in range(10):
+    for rn in range(2,10):
         for bs in [50]:
-            for tpc in [2.0]:
+            for tpc in [1.0]:
                 # -2 = [0.3,0.1]
                 #l=[[0.3,0.2,0.5],0,[0.3,0.2,0.5],[0.3,0.1,0.5],[0.4,0.15,0.5],[0.4,0.2,0.5]][abs(tpc)-1]
                 #l=[[0.5,0.2,0.5],0,[0.4,0.2,0.5],[0.3,0.2,0.5]][abs(tpc)-1]

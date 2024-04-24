@@ -222,14 +222,14 @@ class HERGO(DoubleDQN):
                     'tau': 0.01,
                     'exploration_fraction': 0.5,
                     'exploration_initial_eps': 1.0,
-                    'exploration_final_eps': 0.01,
+                    'exploration_final_eps': 0.05,
                     'learning_rate': 1e-3,
                     'verbose': 0,
                     'device': 'cuda',
                     'replay_buffer_class': FixedHerBuffer,
                     'replay_buffer_kwargs': {
                         'n_sampled_goal': 48,
-                        'goal_selection_strategy': 'final', #future, episode and final #final best results 
+                        'goal_selection_strategy': 'future', #future, episode and final #final best results 
                     },
                     'policy_kwargs':{
                         'activation_fn': torch.nn.ReLU,
