@@ -19,6 +19,8 @@ import cProfile, pstats
 from utils import ExplorationCoverageCallback, UVFStepCounterCallback, randomStepsCallback
 from four_room.env import FourRoomsEnv
 
+from intrinsicRandomWalk import IntrinsicRandomWalk
+
 gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 
 #### Paramampa
@@ -26,7 +28,7 @@ gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 num_envs=1
 seed=0
 PROFILING=False
-LOGGING=True
+LOGGING=False
 
 
 import dill
@@ -114,39 +116,11 @@ class Baseline_CNN(BaseFeaturesExtractor):
         return self.linear(self.cnn(observations))
 
 
-### MultiInput_CNN for UVF ###
 device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
-from stable_baselines3 import HerReplayBuffer
-#for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
-if __name__ == "__main__":
-    for rn in range(2,10):
-        for bs in [50]:
-            for tpc in [1.0]:
-                # -2 = [0.3,0.1]
-                #l=[[0.3,0.2,0.5],0,[0.3,0.2,0.5],[0.3,0.1,0.5],[0.4,0.15,0.5],[0.4,0.2,0.5]][abs(tpc)-1]
-                #l=[[0.5,0.2,0.5],0,[0.4,0.2,0.5],[0.3,0.2,0.5]][abs(tpc)-1]
-
-                eps=0.5
-                print("\n------------------------------------------------")
-                print(f"Starting run {rn} with tp chance {tpc}, buffer size {bs}k, exploration fraction of {eps}")   
-                print("------------------------------------------------\n")
-
-                experiment=f"hergo_b{bs}k/"
-
-                #train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
-                
-                train_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
-                tr_eval_env_tp = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(1)])
-                test_0_env_tp = DummyVecEnv([make_env_fn(test_0_config, seed=seed, rank=i) for i in range(1)])
-                test_100_env_tp = DummyVecEnv([make_env_fn(test_100_config, seed=seed, rank=i) for i in range(1)])
-
-
-                path=base_log+f"{experiment}/{tpc}_e{round(eps*100)}"
-                cf={'policy':'CnnPolicy',
-                    'env':train_env_tp,
-                    'buffer_size': bs*1000,
+from copy import deepcopy
+base_cf={'policy':'CnnPolicy',
                     'batch_size': 256,
                     'gamma': 0.99,
                     'learning_starts': 256,
@@ -155,8 +129,8 @@ if __name__ == "__main__":
                     'train_freq': (10//num_envs, 'step'),
                     'target_update_interval': 10,
                     'tau': 0.01,
-                    'exploration_fraction': eps,
-                    'exploration_initial_eps': 0.5,
+                    'exploration_fraction': 0.5,
+                    'exploration_initial_eps': 1.0,
                     'exploration_final_eps': 0.1,
                     'learning_rate': 2.5e-4,
                     'verbose': 0,
@@ -171,16 +145,67 @@ if __name__ == "__main__":
                         'normalize_images':False
                     }
                     #,'random_walk_duration':tpc,
-                    ,'tp_chance':tpc,
+                    #,'tp_chance':tpc,
                     #,'beta':l
+                    #,'random_steps':15
                 }
+
+model_bases={'tp':tpDQN,'hergo':HERGO,'base':DoubleDQN, 'randomStart':RandomStart, 'intrinsicRandomWalk':IntrinsicRandomWalk}
+
+from stable_baselines3 import HerReplayBuffer
+#for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
+if __name__ == "__main__":
+
+    for rn in range(10):
+        for bs in [500]:
+            for method in ['intrinsicRandomWalk','tp','hergo','base','randomStart'][:1]:
+                tpc="Thursday"
+                eps=2.0
+                print("\n------------------------------------------------")
+                print(f"Starting {method} run {rn} under name \"{tpc}\", buffer size {bs}k, exploration fraction of {eps}")   
+                print("------------------------------------------------\n")
+
+                experiment=f"{method}_b{bs}k/"
+
+                train_env_tp = AdaptedVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
+                
+                train_env = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(num_envs)])
+                tr_eval_env = DummyVecEnv([make_env_fn(train_config, seed=seed, rank=i) for i in range(1)])
+                test_0_env = DummyVecEnv([make_env_fn(test_0_config, seed=seed, rank=i) for i in range(1)])
+                test_100_env = DummyVecEnv([make_env_fn(test_100_config, seed=seed, rank=i) for i in range(1)])
+
+
+                path=base_log+f"{experiment}/{tpc}_e{round(eps*100)}"
+                cf=deepcopy(base_cf)
+                cf['buffer_size']=bs*1000
+
+
+                if method=='hergo':
+                    cf['env']=train_env
+                    cf['tp_chance']=1.0
+
+                elif method=='intrinsicRandomWalk':
+                    cf['env']=train_env
+                    cf['beta']=200
+                    cf['random_steps']=10  #to be double checked
+
+                elif method=='tp':
+                    cf['env']=train_env_tp
+                    cf['tp_chance']=1.0
+
+                elif method=='randomStart':
+                    cf['env']=train_env
+                    cf['random_walk_duration']=15 
+
+                else:
+                    cf['env']=train_env
 
 
                 if LOGGING:
                     run=wandb.init(
                         project="thesis",
                         entity='felix-kaubek',
-                        name=f"hergo_b{bs}k_{tpc}_{rn}",
+                        name=f"{method}_b{bs}k_{tpc}_{rn}",
                         config=cf,
                         monitor_gym=True,
                         sync_tensorboard=True,
@@ -192,20 +217,20 @@ if __name__ == "__main__":
                     profiler = cProfile.Profile()
                     profiler.enable()
 
-                        #tpDQN,HERGO,DoubleDQN, RandomStart, RND_DQN
-                model = HERGO(**cf)
-                                            #tp_chance_start=cf['tp_chance'], tp_chance_end=cf['tp_chance'])  #tpdqn
-                                            #tp_chance=cf['tp_chance'])   #HERGO
-                                            #random_walk_duration=random_steps)  #RandomStart
+                        #tpDQN,HERGO,DoubleDQN, RandomStart, , IntrinsicRandomWalk
+                #model = HERGO(**cf)
+                model_base=model_bases[method]
+                model = model_base(**cf)
 
 
-                eval_tr_callback = EvalCallback(tr_eval_env_tp, log_path=f"{path}/tr/{rn}/", eval_freq=(50000//num_envs),
+
+                eval_tr_callback = EvalCallback(tr_eval_env, log_path=f"{path}/tr/{rn}/", eval_freq=(50000//num_envs),
                                             n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
-                eval_0_callback = EvalCallback(test_0_env_tp, log_path=f"{path}/0/{rn}/", eval_freq=(50000//num_envs),
+                eval_0_callback = EvalCallback(test_0_env, log_path=f"{path}/0/{rn}/", eval_freq=(50000//num_envs),
                                             n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
-                eval_100_callback = EvalCallback(test_100_env_tp, log_path=f"{path}/100/{rn}/", eval_freq=(50000//num_envs),
+                eval_100_callback = EvalCallback(test_100_env, log_path=f"{path}/100/{rn}/", eval_freq=(50000//num_envs),
                                             n_eval_episodes=20, deterministic=True, render=False, verbose=0)
                 
                 #state_action_coverage_callback = ExplorationCoverageCallback(1000, 6240, 3)
@@ -221,7 +246,7 @@ if __name__ == "__main__":
                 #callbacks+=[step_counter_callback]
                 #callbacks+=[random_step_counter_callback]
 
-                model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10, callback=callbacks)
+                model.learn(total_timesteps=500_000, progress_bar=True,  log_interval=10, callback=callbacks)
 
                 if LOGGING:
                     run.finish()

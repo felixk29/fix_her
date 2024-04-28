@@ -1,26 +1,79 @@
 from typing import Callable
+from numpy import ndarray
 from stable_baselines3.common.buffers import ReplayBuffer
-from stable_baselines3.common.type_aliases import Schedule
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.noise import ActionNoise
+from stable_baselines3.common.type_aliases import RolloutReturn, Schedule, TrainFreq
 from stable_baselines3.dqn.policies import DQNPolicy
 import torch as th 
-import torch.functional as F
-import numpy as np
 
-from max_sb3.common.type_aliases import GymEnv, VecEnv
-from max_sb3.dqn.dqn import DQN
+from stable_baselines3.common.vec_env import VecEnv
 from max_sb3.dqn.upolicies import UncertaintyMlpPolicy
-from stable_baselines3.common.utils import polyak_update
 
 from max_sb3.common.uncertainties import RNDUncertaintyStateAction
 from max_sb3.common.ubuffers import UncertaintyReplayBuffer
+from max_sb3.dqn.udqn import UncertaintyDQN
+
+from max_sb3.common.type_aliases import Schedule
+from torch import nn
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, FlattenExtractor
+from typing import Any, Dict, List, Optional, Type
+import gymnasium as gym
+from stable_baselines3.common.buffers import ReplayBuffer
+from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.noise import ActionNoise
+from stable_baselines3.common.type_aliases import GymEnv, RolloutReturn, Schedule, TrainFreq, TrainFrequencyUnit
+from stable_baselines3.common.utils import should_collect_more_steps
+from stable_baselines3.common.vec_env import VecEnv
+class IntrinsicRandomWalkPolicy(UncertaintyMlpPolicy):
+    def __init__(
+        self,
+        observation_space: gym.spaces.Space,
+        action_space: gym.spaces.Space,
+        lr_schedule: Schedule,
+        beta: float,
+        net_arch: Optional[List[int]] = None,
+        activation_fn: Type[nn.Module] = nn.ReLU,
+        features_extractor_class: Type[BaseFeaturesExtractor] = FlattenExtractor,
+        features_extractor_kwargs: Optional[Dict[str, Any]] = None,
+        normalize_images: bool = True,
+        optimizer_class: Type[th.optim.Optimizer] = th.optim.Adam,
+        optimizer_kwargs: Optional[Dict[str, Any]] = None,
+        use_amp: bool = False,
+    ):
+        super().__init__(
+            observation_space,
+            action_space,
+            lr_schedule,
+            net_arch=net_arch,
+            activation_fn=activation_fn,
+            features_extractor_class=features_extractor_class,
+            features_extractor_kwargs=features_extractor_kwargs,
+            normalize_images=normalize_images,
+            optimizer_class=optimizer_class,
+            optimizer_kwargs=optimizer_kwargs,
+            use_amp=use_amp,
+            beta=beta
+        )
+    
+    def intrinsicStep(self, obs: th.Tensor) -> th.Tensor:
+        values = self.u_net(obs)
+        action = values.argmax(dim=1).reshape(-1).detach().cpu().numpy()
+        return action
+
+    def forward(self, obs: th.Tensor) -> th.Tensor:
+        q_values = self.q_net(obs)
+        uncertainties = self.u_net(obs)
+        return q_values + self.beta * uncertainties
 
 
-class IntrinsicRandomWalk(DQN):
+class IntrinsicRandomWalk(UncertaintyDQN):
     
     def __init__(self, policy: str | type[DQNPolicy], env: GymEnv | VecEnv | str, beta: float = 0.5, random_steps:int=5, rnd_config:dict=None, embed_dim:int=512, learning_rate: float | Callable[[float], float] = 0.0001, buffer_size: int = 1000000, learning_starts: int = 50000, batch_size: int = 32, tau: float = 1, gamma: float = 0.99, train_freq: int | th.Tuple[int | str] = 4, gradient_steps: int = 1, replay_buffer_class: type[ReplayBuffer] | None = None, replay_buffer_kwargs: th.Dict[str, th.Any] | None = None, optimize_memory_usage: bool = False, target_update_interval: int = 10000, double_q: bool = False, exploration_fraction: float = 0.1, exploration_initial_eps: float = 1, exploration_final_eps: float = 0.05, max_grad_norm: float = 10, tensorboard_log: str | None = None, policy_kwargs: th.Dict[str, th.Any] | None = None, verbose: int = 0, seed: int | None = None, device: th.device | str = "auto", _init_setup_model: bool = True, use_amp: bool = False):
         
         replay_buffer_class=UncertaintyReplayBuffer
-        policy=UncertaintyMlpPolicy
+        policy=IntrinsicRandomWalkPolicy
+        
         uncertainty_policy_kwargs = dict(activation_fn = th.nn.ReLU, net_arch=[1024, 1024], learning_rate=0.0001)
         if rnd_config != None:
             uncertainty_policy_kwargs.update(rnd_config)
@@ -43,7 +96,15 @@ class IntrinsicRandomWalk(DQN):
                         "uncertainty_of_sampling":True,
                     }
         
-        base_replay_buffer_kwargs.update(replay_buffer_kwargs)
+        if replay_buffer_kwargs != None:
+            base_replay_buffer_kwargs.update(replay_buffer_kwargs)
+
+        base_policy_kwargs = {
+            'beta': beta
+        }
+
+        if policy_kwargs != None:
+            base_policy_kwargs.update(policy_kwargs)
 
         self.embed_dim=embed_dim
         self.random_steps=random_steps
@@ -52,113 +113,184 @@ class IntrinsicRandomWalk(DQN):
         self.num_envs=env.num_envs
         self.episode_steps_taken=[0]*env.num_envs
 
+        super().__init__(policy, env, beta, learning_rate, buffer_size, learning_starts, batch_size, tau, gamma, train_freq, gradient_steps, replay_buffer_class, base_replay_buffer_kwargs, optimize_memory_usage, target_update_interval, double_q, exploration_fraction, exploration_initial_eps, exploration_final_eps, max_grad_norm, tensorboard_log, base_policy_kwargs, verbose, seed, device, _init_setup_model, use_amp)
         self.u_scaler = th.cuda.amp.GradScaler(enabled=self.use_amp)
-        super().__init__(policy, env, beta, learning_rate, buffer_size, learning_starts, batch_size, tau, gamma, train_freq, gradient_steps, replay_buffer_class, replay_buffer_kwargs, optimize_memory_usage, target_update_interval, double_q, exploration_fraction, exploration_initial_eps, exploration_final_eps, max_grad_norm, tensorboard_log, policy_kwargs, verbose, seed, device, _init_setup_model, use_amp)
 
-    def _create_aliases(self) -> None:
-        super()._create_aliases()
-        self.u_net = self.policy.u_net
-        self.u_net_target = self.policy.u_net_target
-
-    def _on_step(self) -> None:
+    def collect_rollouts(
+        self,
+        env: VecEnv,
+        callback: BaseCallback,
+        train_freq: TrainFreq,
+        replay_buffer: ReplayBuffer,
+        action_noise: Optional[ActionNoise] = None,
+        learning_starts: int = 0,
+        log_interval: Optional[int] = None,
+    ) -> RolloutReturn:
         """
-        Update the exploration rate and target network if needed.
-        This method is called in ``collect_rollouts()`` after each step in the environment.
+        Collect experiences and store them into a ``ReplayBuffer``.
+
+        :param env: The training environment
+        :param callback: Callback that will be called at each step
+            (and at the beginning and end of the rollout)
+        :param train_freq: How much experience to collect
+            by doing rollouts of current policy.
+            Either ``TrainFreq(<n>, TrainFrequencyUnit.STEP)``
+            or ``TrainFreq(<n>, TrainFrequencyUnit.EPISODE)``
+            with ``<n>`` being an integer greater than 0.
+        :param action_noise: Action noise that will be used for exploration
+            Required for deterministic policy (e.g. TD3). This can also be used
+            in addition to the stochastic policy for SAC.
+        :param learning_starts: Number of steps before learning for the warm-up phase.
+        :param replay_buffer:
+        :param log_interval: Log data every ``log_interval`` episodes
+        :return:
         """
-        super()._on_step()
-        # Account for multiple environments
-        # each call to step() corresponds to n_envs transitions
-        if self._n_calls % max(self.target_update_interval // self.n_envs, 1) == 0:
-            polyak_update(self.u_net.parameters(), self.u_net_target.parameters(), self.tau)
+        # Switch to eval mode (this affects batch norm / dropout)
+        self.policy.set_training_mode(False)
 
-        self.logger.record("rollout/beta", self.beta)
+        num_collected_steps, num_collected_episodes = 0, 0
 
-    def train(self, gradient_steps: int, batch_size: int = 100) -> None:
-        # Switch to train mode (this affects batch norm / dropout)
-        self.policy.set_training_mode(True)
-        # Update learning rate according to schedule
-        self._update_learning_rate(self.policy.optimizer)
+        assert isinstance(env, VecEnv), "You must pass a VecEnv"
+        assert train_freq.frequency > 0, "Should at least collect one step or episode."
 
-        losses = []
-        u_losses = []
-        for _ in range(gradient_steps):
-            # Sample replay buffer
-            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+        if env.num_envs > 1:
+            assert train_freq.unit == TrainFrequencyUnit.STEP, "You must use only one env when doing episodic training."
 
-            with th.autocast(device_type=self.device.type, dtype=th.float16, enabled=self.use_amp):
-                with th.no_grad():
-                    # Compute the next Q-values using the target network
-                    next_q_values = self.q_net_target(replay_data.next_observations)
-                    if self.double_q:
-                        # Compute the next Q-values using the current network
-                        next_q_values_current = self.q_net(replay_data.next_observations)
-                        next_u_values_current = self.u_net(replay_data.next_observations)
-                        # Determine argmax based on the current network values
-                        actions = (next_q_values_current + self.beta * next_u_values_current).max(dim=1)[1].unsqueeze(dim=1)
-                        next_q_values = next_q_values.gather(dim=1, index=actions)
-                    else:
-                        next_u_values = self.u_net_target(replay_data.next_observations)
-                        actions = (next_q_values + self.beta * next_u_values).max(dim=1)[1].unsqueeze(dim=1)
-                        next_q_values = next_q_values.gather(dim=1, index=actions)
+        if self.use_sde:
+            self.actor.reset_noise(env.num_envs)
 
-                    # 1-step TD target
-                    target_q_values = replay_data.rewards[0] + (1 - replay_data.dones) * self.gamma * next_q_values
+        callback.on_rollout_start()
+        continue_training = True
+        while should_collect_more_steps(train_freq, num_collected_steps, num_collected_episodes):
+            if self.use_sde and self.sde_sample_freq > 0 and num_collected_steps % self.sde_sample_freq == 0:
+                # Sample a new noise matrix
+                self.actor.reset_noise(env.num_envs)
 
-            with th.autocast(device_type=self.device.type, dtype=th.float16, enabled=self.use_amp):
-                # Get current Q-values estimates
-                current_q_values = self.q_net(replay_data.observations)
+            # Select action randomly or according to policy
+            actions, buffer_actions = self._sample_action(learning_starts, action_noise, env.num_envs)
 
-                # Retrieve the q-values for the actions from the replay buffer
-                current_q_values = th.gather(current_q_values, dim=1, index=replay_data.actions.long())
+            # Rescale and perform action
+            new_obs, rewards, dones, infos = env.step(actions)
 
-                # Compute Huber loss (less sensitipolicy: str | type[DQNPolicy]ve to outliers)
-                loss = F.smooth_l1_loss(current_q_values, target_q_values)
+            # Increase step counts
+            self.episode_steps_taken = [x+1 if not done else 0 for x, done in zip(self.episode_steps_taken, dones)]
 
-            # Optimize the policy
-            self.policy.optimizer.zero_grad()
-            self.scaler.scale(loss).backward()
-            self.scaler.unscale_(self.policy.optimizer)
-            # Clip gradient norm
-            th.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
-            self.scaler.step(self.policy.optimizer)
-            self.scaler.update()
+            self.num_timesteps += env.num_envs
+            num_collected_steps += 1
 
-            with th.autocast(device_type=self.device.type, dtype=th.float16, enabled=self.use_amp):
-                with th.no_grad():
-                    # Compute the next uncertainties using the target network
-                    next_u_values = self.u_net_target(replay_data.next_observations)
-                    if self.double_q:
-                        next_u_values = next_u_values.gather(dim=1, index=actions)
-                    else:
-                        next_u_values = next_u_values.gather(dim=1, index=actions)
-                    # 1-step TD target
-                    target_u_values = replay_data.rewards[1] + (1 - replay_data.dones) * self.gamma * next_u_values
+            # Give access to local variables
+            callback.update_locals(locals())
+            # Only stop training if return value is False, not when it is None.
+            if not callback.on_step():
+                return RolloutReturn(num_collected_steps * env.num_envs, num_collected_episodes, continue_training=False)
 
-            with th.autocast(device_type=self.device.type, dtype=th.float16, enabled=self.use_amp):
-                # Get current uncertainty estimates
-                current_u_values = self.u_net(replay_data.observations)
+            # Retrieve reward and episode length if using Monitor wrapper
+            self._update_info_buffer(infos, dones)
 
-                # Retrieve the uncertainties for the actions from the replay buffer
-                current_u_values = th.gather(current_u_values, dim=1, index=replay_data.actions.long())
+            # Store data in replay buffer (normalized action and unnormalized observation)
+            self._store_transition(replay_buffer, buffer_actions, new_obs, rewards, dones, infos)  # type: ignore[arg-type]
 
-                # Compute Huber loss (less sensitive to outliers)
-                u_loss = F.smooth_l1_loss(current_u_values, target_u_values)
+            self._update_current_progress_remaining(self.num_timesteps, self._total_timesteps)
 
-            # Optimize the policy
-            self.policy.u_optimizer.zero_grad()
-            self.u_scaler.scale(u_loss).backward()
-            self.u_scaler.unscale_(self.policy.u_optimizer)
-            # Clip gradient norm
-            th.nn.utils.clip_grad_norm_(self.policy.u_net.parameters(), self.max_grad_norm)
-            self.u_scaler.step(self.policy.u_optimizer)
-            self.u_scaler.update()
+            # For DQN, check if the target network should be updated
+            # and update the exploration schedule
+            # For SAC/TD3, the update is dones as the same time as the gradient update
+            # see https://github.com/hill-a/stable-baselines/issues/900
+            self._on_step()
 
-            losses.append(loss.item())
-            u_losses.append(u_loss.item())
+            for idx, done in enumerate(dones):
+                if done:
 
-        # Increase update counter
-        self._n_updates += gradient_steps
+                    # Reset the random steps taken (again)
+                    self.episode_steps_taken[idx] = 0
 
-        self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
-        self.logger.record("train/loss", np.mean(losses))
-        self.logger.record("train/u_loss", np.mean(u_losses))
+                    # Update stats
+                    num_collected_episodes += 1
+                    self._episode_num += 1
+
+                    if action_noise is not None:
+                        kwargs = dict(indices=[idx]) if env.num_envs > 1 else {}
+                        action_noise.reset(**kwargs)
+
+                    # Log training infos
+                    if log_interval is not None and self._episode_num % log_interval == 0:
+                        self._dump_logs()
+        callback.on_rollout_end()
+
+        return RolloutReturn(num_collected_steps * env.num_envs, num_collected_episodes, continue_training)
+
+    def predict(self, observation: ndarray | Dict[str, ndarray], state: th.Tuple[ndarray] | None = None, episode_start: ndarray | None = None, deterministic: bool = False) -> th.Tuple[ndarray | th.Tuple[ndarray] | None]:
+        assert len(self.episode_steps_taken) == 1, "IntrinsicRandomWalk only supports one environment atm"
+        if self.episode_steps_taken[0] < self.random_steps and not deterministic:
+            obs_tens = th.tensor(observation).to(self.device)
+            return self.policy.intrinsicStep(obs_tens), observation
+        return super().predict(observation, state, episode_start, deterministic)
+
+if __name__ == "__main__":
+    from test_agent import Baseline_CNN,train_config, test_0_config, test_100_config, make_env_fn, DummyVecEnv, EvalCallback
+    import torch
+    from max_sb3.common.uncertainties import RNDUncertaintyStateAction
+    from max_sb3.common.ubuffers import UncertaintyReplayBuffer
+    from max_sb3.dqn.upolicies import UncertaintyMlpPolicy
+    eps=1.5
+    bs=500
+    num_envs=1
+    embed_dim = 512
+    # 0.5 eps==300, 1.0 eps == 150, 1.5 eps == 600
+    for eps in [0.5,1.0,1.5]:
+        beta=[150,300,600][int(eps*2)-1]
+        for rn in range(5):
+            env_train=DummyVecEnv([make_env_fn(train_config, seed=0, rank=0)])
+            env_test0=DummyVecEnv([make_env_fn(test_0_config, seed=0, rank=0)])
+            env_test100=DummyVecEnv([make_env_fn(test_100_config, seed=0, rank=0)])
+            path=f"experiments/logs/rnd_{bs}k/{eps}/"
+
+            print("Testing RND")
+            config={'policy':UncertaintyMlpPolicy,
+                        'env':env_train,
+                        'buffer_size': bs*1000,
+                        'batch_size': 256,
+                        'gamma': 0.99,
+                        'learning_starts': 256,
+                        'max_grad_norm': 1.0,
+                        'gradient_steps': 1,
+                        'train_freq': (10//num_envs, 'step'),
+                        'target_update_interval': 10,
+                        'tau': 0.01,
+                        'exploration_fraction': 0.5,
+                        'exploration_initial_eps': 1.0,
+                        'exploration_final_eps': 0.01,
+                        'learning_rate': 2.5e-4,
+                        'verbose': 0,
+                        'device': 'cuda',
+                        'policy_kwargs':{
+                            'activation_fn': torch.nn.ReLU,
+                            'net_arch': [],
+                            'features_extractor_class': Baseline_CNN,
+                            'features_extractor_kwargs':{'features_dim': 512},
+                            'optimizer_class':torch.optim.Adam,
+                            'optimizer_kwargs':{'weight_decay': 1e-5},
+                            'normalize_images':False,
+                        },
+                        'beta': beta,
+
+                    }
+
+            eval_tr_callback = EvalCallback(env_train, log_path=f"{path}/tr/{rn}/", eval_freq=(25000//num_envs),
+                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
+
+            eval_0_callback = EvalCallback(env_test0, log_path=f"{path}/0/{rn}/", eval_freq=(25000//num_envs),
+                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
+
+            eval_100_callback = EvalCallback(env_test100, log_path=f"{path}/100/{rn}/", eval_freq=(25000//num_envs),
+                                                n_eval_episodes=20, deterministic=True, render=False, verbose=0)
+
+            callbacks=[eval_tr_callback, eval_0_callback, eval_100_callback]
+
+
+            model = IntrinsicRandomWalk(**config)
+            
+            model.learn(total_timesteps=500000, progress_bar=True,  log_interval=10,callback=callbacks)
+
+
+

@@ -48,8 +48,7 @@ class tpDQN(DoubleDQN):
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
         #self added
-        tp_chance_start:float=.0,
-        tp_chance_end:float=.0,
+        tp_chance:float=.0,
     ) -> None:
         super().__init__(
             policy,
@@ -93,14 +92,13 @@ class tpDQN(DoubleDQN):
         self.env.set_get_state(self._inject_buffer_into_env)
         self.env.tp_chance=self._inject_tp_chance
         self.env.is_buffer_ready=self._inject_is_buffer_ready
-        self.max_tp_chance=tp_chance_end
-        self.start_tp_chance=tp_chance_start
+        self.tp_chance=tp_chance
 
         self.refilled=0
 
 
     def _inject_tp_chance(self):
-        number = self.max_tp_chance - (self.max_tp_chance - self.start_tp_chance) * self.num_timesteps / self._total_timesteps_tp
+        number = self.tp_chance
         return number
 
     def _inject_is_buffer_ready(self):
@@ -121,16 +119,15 @@ class tpDQN(DoubleDQN):
 
             observations=replay_data.observations
 
-
             obs=observations.view(self.state_stack_size * 3, -1)
             obs=obs.type(th.FloatTensor)
             obs=obs.to(self.device)
             pred, target = self.rnd(obs)
 
             #self.rnd.train(obs)
-
-            rnd_loss = F.l1_loss(pred, target, reduction='none')
+            rnd_loss = F.l1_loss(pred, target, reduction='none').mean(axis=1)
             _, indices = th.sort(rnd_loss, descending=True, axis=0)
+
 
             indices = indices[:self.state_stack_size]
             self.state_stack = list(observations[indices].unbind())
@@ -144,7 +141,7 @@ class tpDQN(DoubleDQN):
         obs=obs.type(th.FloatTensor)
         obs=obs.to(self.device)
         #only train if tp is actually used anytime
-        if self.start_tp_chance != 0. and self.max_tp_chance != 0.:
+        if self.tp_chance != 0.:
             self.rnd.train(obs)        
 
 

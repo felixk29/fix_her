@@ -8,17 +8,13 @@ from max_sb3.common.ubuffers import UncertaintyReplayBuffer
 import torch
 import dill
 from four_room.wrappers import gym_wrapper
-from src.networks import CNN
-
+from test_agent import Baseline_CNN
 import gymnasium as gym
 from four_room.env import FourRoomsEnv
 
 gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 
-with open('four_room/configs/fourrooms_train_config.pl', 'rb') as file:
-    train_config = dill.load(file)
-with open('four_room/configs/fourrooms_test_0_config.pl', 'rb') as file:
-    test_config = dill.load(file)
+from test_agent import train_config, test_config
 
 num_train_configs = len(train_config['topologies'])
 num_test_configs = len(test_config['topologies'])
@@ -75,7 +71,7 @@ for i in range(1):
 
 
 
-    policy_kwargs = dict(features_extractor_class = CNN, features_extractor_kwargs = {'features_dim': 512}, normalize_images=False, net_arch=[], optimizer_kwargs={'weight_decay':w_decay}, beta=beta)
+    policy_kwargs = dict(features_extractor_class = Baseline_CNN, features_extractor_kwargs = {'features_dim': 512}, normalize_images=False, net_arch=[], optimizer_kwargs={'weight_decay':w_decay}, beta=beta)
 
     replay_buffer_kwargs = {
         "uncertainty": uncertainty, 
