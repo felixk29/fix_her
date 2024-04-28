@@ -159,6 +159,7 @@ class HERGO(DoubleDQN):
         _init_setup_model: bool = True,
         #self added
         tp_chance:float=.0,
+        max_steps:int=30,
     ) -> None:
         super().__init__(
             policy,
@@ -181,6 +182,7 @@ class HERGO(DoubleDQN):
             seed=seed,
             optimize_memory_usage=optimize_memory_usage,
         )
+        self.max_steps=max_steps
 
         self.exploration_initial_eps = exploration_initial_eps
         self.exploration_final_eps = exploration_final_eps
@@ -424,7 +426,7 @@ class HERGO(DoubleDQN):
                         idx_done=True
                         idx_reward=1
                         self.reset_uvf_stat(idx)
-                    if self.current_uvf_steps[idx]==40:
+                    if self.current_uvf_steps[idx]>=self.max_steps:
                         msg='max_steps'
                         uvf_stepcount_history.append((idx, self.num_timesteps, self.current_uvf_steps[idx], self._last_obs[idx],self.interim_goal[idx],self.uvf_first_obs[idx],msg))
                         self.reset_uvf_stat(idx)
