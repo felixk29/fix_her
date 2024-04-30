@@ -157,10 +157,11 @@ from stable_baselines3 import HerReplayBuffer
 if __name__ == "__main__":
 
     for rn in range(10):
-        for bs in [500]:
-            for method in ['intrinsicRandomWalk','tp','hergo','base','randomStart'][:1]:
+        for eps in [2.0]:
+            bs=50
+            #for method in ['intrinsicRandomWalk','tp','hergo','base','randomStart'][:1]:
+            for method in ['hergo']:
                 tpc="Thursday"
-                eps=2.0
                 print("\n------------------------------------------------")
                 print(f"Starting {method} run {rn} under name \"{tpc}\", buffer size {bs}k, exploration fraction of {eps}")   
                 print("------------------------------------------------\n")
@@ -183,11 +184,12 @@ if __name__ == "__main__":
                 if method=='hergo':
                     cf['env']=train_env
                     cf['tp_chance']=1.0
+                    cf['max_steps']=30
 
                 elif method=='intrinsicRandomWalk':
                     cf['env']=train_env
-                    cf['beta']=200
-                    cf['random_steps']=10  #to be double checked
+                    cf['beta']=300
+                    cf['random_steps']=15  #to be double checked
 
                 elif method=='tp':
                     cf['env']=train_env_tp
@@ -196,10 +198,18 @@ if __name__ == "__main__":
                 elif method=='randomStart':
                     cf['env']=train_env
                     cf['random_walk_duration']=15 
-
                 else:
                     cf['env']=train_env
 
+                # if eps==5.0:
+                #     cf['exploration_initial_eps']= 0.5
+
+                # elif eps==6.0:
+                #     cf['beta']=0.0
+
+                # elif eps==7.0:
+                #     cf['random_steps']=0  
+                    
 
                 if LOGGING:
                     run=wandb.init(
