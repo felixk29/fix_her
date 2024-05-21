@@ -49,6 +49,7 @@ class tpDQN(DoubleDQN):
         _init_setup_model: bool = True,
         #self added
         tp_chance:float=.0,
+        tournament_multiplier:int=3,
     ) -> None:
         super().__init__(
             policy,
@@ -94,6 +95,8 @@ class tpDQN(DoubleDQN):
         self.env.is_buffer_ready=self._inject_is_buffer_ready
         self.tp_chance=tp_chance
 
+        self.tournament_multiplier=tournament_multiplier
+        self.num_envs=self.env.num_envs
         self.refilled=0
 
 
@@ -108,18 +111,17 @@ class tpDQN(DoubleDQN):
 
     #just using a stack, if threading problems could upgrade to a queue, this is just simpler
     state_stack=[]
-    state_stack_size=20
 
     def _inject_buffer_into_env(self):
         if len(self.state_stack) == 0:
             self.refilled+=1
-            replay_data = self.replay_buffer.sample(self.state_stack_size * 3, env=self._vec_normalize_env)  # type: ignore[union-attr]
+            replay_data = self.replay_buffer.sample(self.num_envs * self.tournament_multiplier, env=self._vec_normalize_env)  # type: ignore[union-attr]
             # this is a named tuple, delete every entry that has or truncated = True
             #TODO maybe add a check that its not done before it arrived?? but idk if nessary
 
             observations=replay_data.observations
 
-            obs=observations.view(self.state_stack_size * 3, -1)
+            obs=observations.view(self.num_envs * self.tournament_multiplier, -1)
             obs=obs.type(th.FloatTensor)
             obs=obs.to(self.device)
             pred, target = self.rnd(obs)
@@ -129,7 +131,7 @@ class tpDQN(DoubleDQN):
             _, indices = th.sort(rnd_loss, descending=True, axis=0)
 
 
-            indices = indices[:self.state_stack_size]
+            indices = indices[:self.num_envs]
             self.state_stack = list(observations[indices].unbind())
             
         return self.state_stack.pop().reshape(self.env.observation_space.shape).cpu().numpy()

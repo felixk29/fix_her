@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from time import time
 import torch as th
-
+from stable_baselines3.common.vec_env import VecVideoRecorder
+import imageio.v3 as iio
 class ExplorationCoverageCallback(BaseCallback):
     def __init__(self, log_freq, total_states, num_actions, verbose=0):
         super(ExplorationCoverageCallback, self).__init__(verbose)
@@ -23,6 +24,13 @@ class ExplorationCoverageCallback(BaseCallback):
 
         return True
 
+_HEATMAP = False
+def obs_to_entry(obs):
+    state=obs_to_state(obs)
+    data=state[:3]
+    name=str(state[3:])   
+
+    return name, data
 
 class UVFStepCounterCallback(BaseCallback):
     def __init__(self, log_freq, verbose=0):
@@ -125,19 +133,25 @@ def state_to_obs(state):
     return obs
 
 class heatmapCallback(BaseCallback):
-    def __init__(self, save_dir: str = './experiments/logs/heatmaps', log_freq: int = 100000, verbose=0, id: str = ""):
+    def __init__(self, save_dir: str = './experiments/logs/heatmaps', log_freq: int = 100000, verbose=0, id: str = "", hergo=False):
         super(heatmapCallback, self).__init__(verbose)
+        self.hergo=hergo
         self.log_freq = log_freq
         self.save_dir = save_dir
+        self.first = True
         self.id = id
         self.dir_dict = {0: '→', 1: '↓', 2: '←',
                          3: '↑', -1: 'G', -2: 'X', -3: ' '}
 
     def _on_step(self) -> bool:
-        if self.num_timesteps % self.log_freq == 0:
+        if self.num_timesteps % self.log_freq == 0 or self.first:
+            self.first= False
             tik = time()
             nr = self.num_timesteps//self.log_freq
-            heatmap, annot = self.calculateHeatmap()
+            if self.hergo:
+                heatmap, annot = self.calculateHeatmapHergo()
+            else:
+                heatmap, annot = self.calculateHeatmap()
 
             max_val = np.max(heatmap)*1.05
             min_val = np.min(heatmap[heatmap > -90])
@@ -151,6 +165,33 @@ class heatmapCallback(BaseCallback):
         return True
 
     def calculateHeatmap(self):
+        nn = self.locals['self'].q_net
+        goal = self.locals['self']._last_obs[0]
+
+        env = obs_to_state(goal)
+        walls = env[-4:]  # walls are up down left right range= 0,1,2
+
+        heatmap = np.zeros((9, 9, 4))-100
+
+        for y in range(1, 8):
+            for x in range(1, 8):
+                if (x == 4 or y == 4) and not ((x, y) in [(4, 1+walls[0]), (4, 5+walls[1]), (1+walls[2], 4), (5+walls[3], 4)]):
+                    continue  # checks so only doorways are calculated
+
+                for dir in range(4):  # dir 0-3 : right down left up
+                    obs = th.Tensor(state_to_obs((x, y, dir, *env[3:]))).to('cuda' if th.cuda.is_available() else 'cpu')
+                    heatmap[y, x, dir] = th.max(nn(th.Tensor(obs))).cpu().detach().item()
+
+        values_2d = np.max(heatmap, axis=2)
+        annot = np.argmax(heatmap, axis=2)
+        annot[values_2d == -100] = -3
+        annot[env[4], env[3]] = -1
+        annot = np.array([self.dir_dict[i]
+                         for i in annot.reshape((81))]).reshape((9, 9))
+
+        return values_2d, annot
+
+    def calculateHeatmapHergo(self):
         nn = self.locals['self'].q_net
         goal = self.locals['self']._last_obs['desired_goal'][0]
 
@@ -173,9 +214,11 @@ class heatmapCallback(BaseCallback):
 
         values_2d = np.max(heatmap, axis=2)
         annot = np.argmax(heatmap, axis=2)
+
         annot[values_2d == -100] = -3
         annot[env[4], env[3]] = -2
         annot[env[1], env[0]] = -1
+        
         annot = np.array([self.dir_dict[i]
                          for i in annot.reshape((81))]).reshape((9, 9))
 
@@ -189,4 +232,42 @@ class randomStepsCallback(BaseCallback):
     def _on_step(self):
         if self.locals['random_steps'] is not None:
             self.logger.record('train/random_steps', self.locals['random_steps'])
+        return True
+class renderEpisodeCallback(BaseCallback):
+    def __init__(self, save_dir: str = './experiments/logs/episodes', id:str="",env = None, log_freq: int = 100000, verbose=0, hergo=False):
+        super(renderEpisodeCallback, self).__init__(verbose)
+        self.env=env
+        self.id=id
+        self.hergo=hergo
+        self.log_freq = log_freq
+        self.save_dir = save_dir
+        self.once=True
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps % self.log_freq == 0  or self.once:
+            self.once=False
+
+            env=self.env
+
+            imgs=[]
+            obs,_ = env.reset()
+
+            if self.hergo:
+                goal=obs_to_state(obs['desired_goal'])
+
+            img=env.render()
+            #
+            done,trunc = False,False
+            imgs.append(img)
+            while not done and not trunc:
+                action, _ = self.model.predict(obs)
+                obs, _, done, trunc , _ = env.step(action)
+                img=env.render()
+
+                #marking goal
+                if self.hergo:
+                    img[(goal[1]*32)+1:(goal[1]+1)*32,(goal[0]*32)+1:(goal[0]+1)*32]=[0,0,255]
+
+                imgs.append(img)
+            iio.imwrite(f"behaviour{self.id}_{self.num_timesteps//self.log_freq}.gif",imgs,duration=100,loop=0)
         return True

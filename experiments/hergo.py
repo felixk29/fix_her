@@ -34,7 +34,10 @@ from fixedHER import FixedHerBuffer
 
 
 #only for metrics 
-from four_room.utils import obs_to_state
+from utils import obs_to_state, _HEATMAP, obs_to_entry
+
+
+
 
 # cheating to verify something
 def samePos(a,b):
@@ -108,8 +111,6 @@ class MultiInput_CNN(BaseFeaturesExtractor):
             nn.ReLU(),
             nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
             nn.ReLU(),
-            #
-
             nn.Flatten(),
         )
 
@@ -127,6 +128,64 @@ class MultiInput_CNN(BaseFeaturesExtractor):
 
         t=self.linear(self.cnn(th.cat([obs,goal],dim=1)))
         return t
+
+class MultiInput_Hyper(BaseFeaturesExtractor):
+    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 512, device=th.device("cuda")):
+        super(MultiInput_Hyper, self).__init__(observation_space, features_dim)
+        self.device = device
+        # We assume CxHxW images (channels first)
+        # Re-ordering will be done by pre-preprocessing or wrapper
+        n_input_channels = observation_space['observation'].shape[0]
+        self.cnn_obs = nn.Sequential(
+            nn.Conv2d(n_input_channels, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        self.cnn_goal = nn.Sequential(
+            nn.Conv2d(n_input_channels,64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, padding_mode='circular'),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+
+        with torch.no_grad():
+            n_flatten = self.cnn_obs(torch.ones(1, n_input_channels, *observation_space['observation'].shape[1:])).shape[1]
+            n_flatten_goal = self.cnn_goal(torch.ones(1, n_input_channels, *observation_space['observation'].shape[1:])).shape[1]
+
+        self.linear_obs = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.ReLU())        
+        
+        self.linear_goal= nn.Sequential(nn.Linear(n_flatten_goal, features_dim*features_dim+features_dim), nn.ReLU())
+
+    def forward(self, observations: spaces.Dict) -> torch.Tensor:
+
+        if len(observations['desired_goal'].shape) < 4:
+            obs = observations['observation'].unsqueeze(0).to(self.device)
+            goal = observations['desired_goal'].unsqueeze(0).to(self.device)
+        else:
+            obs = observations['observation'].to(self.device)
+            goal = observations['desired_goal'].to(self.device)
+
+        obs=self.linear_obs(self.cnn_obs(obs))
+        goal=self.linear_goal(self.cnn_goal(goal))
+
+        weights=goal[:,:-self.features_dim].view(goal.shape[0],self.features_dim,self.features_dim)
+        bias=goal[:,-self.features_dim:]
+        
+        #goal provides the weights last layer of obs
+        combined=th.matmul(obs.unsqueeze(1),weights).squeeze(1)+bias
+
+        return F.relu(combined)
+
+
+
 class HERGO(DoubleDQN):
     uvf: DoubleDQN =None
 
@@ -160,6 +219,8 @@ class HERGO(DoubleDQN):
         #self added
         tp_chance:float=.0,
         max_steps:int=30,
+        sample_size_mult:int=3,
+        arch:str='stack'
     ) -> None:
         super().__init__(
             policy,
@@ -182,6 +243,10 @@ class HERGO(DoubleDQN):
             seed=seed,
             optimize_memory_usage=optimize_memory_usage,
         )
+        if _HEATMAP:
+            self.start_pos_dict = {}
+
+    
         self.max_steps=max_steps
 
         self.exploration_initial_eps = exploration_initial_eps
@@ -202,6 +267,7 @@ class HERGO(DoubleDQN):
         self.observation_space_size= th.prod(th.tensor(self.env.observation_space.shape))
         self.rnd= RND(self.env.observation_space.shape, device=self.device)
         
+        self.sample_size_mult=sample_size_mult
         self.tp_chance=tp_chance
         self.num_envs= self.env.num_envs
         self.interim_goal= [None]*self.num_envs
@@ -211,6 +277,27 @@ class HERGO(DoubleDQN):
         self.uvf_first_obs= [None]*self.num_envs
 
         uvf_logger= configure()
+        self.arch=arch
+
+        if arch=='stack':
+            pk={'activation_fn': torch.nn.ReLU,
+                        'net_arch': [256,64],
+                        'features_extractor_class': MultiInput_CNN,
+                        'features_extractor_kwargs':{'features_dim': 512},
+                        'optimizer_class':torch.optim.Adam,
+                        'optimizer_kwargs':{'weight_decay': 1e-5},
+                        'normalize_images':False
+                    }
+        elif arch=='hyper':
+            pk={'activation_fn': torch.nn.ReLU,
+                        'net_arch': [16],
+                        'features_extractor_class': MultiInput_Hyper,
+                        'features_extractor_kwargs':{'features_dim': 64},
+                        'optimizer_class':torch.optim.Adam,
+                        'optimizer_kwargs':{'weight_decay': 1e-5},
+                        'normalize_images':False
+                    }
+
 
         #TODO: figure out a better solution
         self.uvf_cf={'buffer_size': 50*1000,
@@ -233,15 +320,7 @@ class HERGO(DoubleDQN):
                         'n_sampled_goal': 48,
                         'goal_selection_strategy': 'future', #future, episode and final #final best results 
                     },
-                    'policy_kwargs':{
-                        'activation_fn': torch.nn.ReLU,
-                        'net_arch': [256,64],
-                        'features_extractor_class': MultiInput_CNN,
-                        'features_extractor_kwargs':{'features_dim': 512},
-                        'optimizer_class':torch.optim.Adam,
-                        'optimizer_kwargs':{'weight_decay': 1e-5},
-                        'normalize_images':False
-                    },
+                    'policy_kwargs':pk,
                 }
         self.uvf= DoubleDQN('MultiInputPolicy', UVFWrapper(self.env), **self.uvf_cf)     
         self.uvf.set_logger(uvf_logger)
@@ -283,6 +362,7 @@ class HERGO(DoubleDQN):
     current_uvf_steps=[]
     # list of first observation in episode
     uvf_first_obs=[]
+
 
     def reset_uvf_stat(self,id):
         self.interim_goal[id]= None
@@ -383,6 +463,7 @@ class HERGO(DoubleDQN):
 
             # TODO split into two buffers, one for main policy and one for uvf
             for idx in range(env.num_envs):
+
                 if self.does_interim_goal[idx]:
                     ### UVF PART
 
@@ -432,6 +513,11 @@ class HERGO(DoubleDQN):
                         self.reset_uvf_stat(idx)
                         idx_done=True
 
+                    if _HEATMAP and idx_done:
+                        name, data = obs_to_entry(new_obs[idx])
+                        if name not in self.start_pos_dict:
+                            self.start_pos_dict[name] = []
+                        self.start_pos_dict[name].append(data)
 
                     # if problems change _last_obs to new_obs with space.dict
 
@@ -480,7 +566,7 @@ class HERGO(DoubleDQN):
                         self.does_interim_goal[idx]= True
                         start=self._last_obs[idx]
                         self.uvf_first_obs[idx]=start
-                        self.interim_goal[idx]= self.get_interim_goal_context(start)
+                        self.interim_goal[idx]= self.get_interim_goal_random()
 
                     # Update stats
                     num_collected_episodes += 1
@@ -502,11 +588,11 @@ class HERGO(DoubleDQN):
     goal_stack= []
     def get_interim_goal_random(self):
         if len(self.goal_stack) == 0:
-                replay_data = self.replay_buffer.sample(30)  # type: ignore[union-attr]
+                replay_data = self.replay_buffer.sample(self.sample_size_mult*self.num_envs)  # type: ignore[union-attr]
                                                                                         #self._vec_normalize_env originally
                 observations=replay_data.observations
 
-                obs=observations.view(30, -1)
+                obs=observations.view(self.sample_size_mult*self.num_envs, -1)
                 obs=obs.type(th.FloatTensor)
                 obs=obs.to(self.device)
                 pred, target = self.rnd(obs)
@@ -516,7 +602,7 @@ class HERGO(DoubleDQN):
                 rnd_loss = F.l1_loss(pred, target, reduction='none').mean(axis=1)
                 _, indices = th.sort(rnd_loss, descending=True, axis=0)
 
-                indices = indices[:10]
+                indices = indices[:self.num_envs]
                 self.goal_stack = list(observations[indices].unbind())
 
         return self.goal_stack.pop().reshape(self.env.observation_space.shape).cpu().numpy()
@@ -530,7 +616,7 @@ class HERGO(DoubleDQN):
 
         timeout=0
         while True:
-            data = self.replay_buffer.sample(15).observations.cpu().numpy()
+            data = self.replay_buffer.sample(self.sample_size_mult).observations.cpu().numpy()
             for ob in data:
                 if getWalls(ob) == current_state:
                     potential[counter]=th.Tensor(ob)

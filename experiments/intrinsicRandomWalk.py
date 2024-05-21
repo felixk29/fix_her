@@ -66,15 +66,19 @@ class IntrinsicRandomWalkPolicy(UncertaintyMlpPolicy):
         uncertainties = self.u_net(obs)
         return q_values + self.beta * uncertainties
 
-
+#for metric purposes only
+from utils import obs_to_state, _HEATMAP, obs_to_entry
 class IntrinsicRandomWalk(UncertaintyDQN):
     
     def __init__(self, policy: str | type[DQNPolicy], env: GymEnv | VecEnv | str, beta: float = 0.5, random_steps:int=5, rnd_config:dict=None, embed_dim:int=512, learning_rate: float | Callable[[float], float] = 0.0001, buffer_size: int = 1000000, learning_starts: int = 50000, batch_size: int = 32, tau: float = 1, gamma: float = 0.99, train_freq: int | th.Tuple[int | str] = 4, gradient_steps: int = 1, replay_buffer_class: type[ReplayBuffer] | None = None, replay_buffer_kwargs: th.Dict[str, th.Any] | None = None, optimize_memory_usage: bool = False, target_update_interval: int = 10000, double_q: bool = False, exploration_fraction: float = 0.1, exploration_initial_eps: float = 1, exploration_final_eps: float = 0.05, max_grad_norm: float = 10, tensorboard_log: str | None = None, policy_kwargs: th.Dict[str, th.Any] | None = None, verbose: int = 0, seed: int | None = None, device: th.device | str = "auto", _init_setup_model: bool = True, use_amp: bool = False):
         
+        if _HEATMAP:
+            self.start_pos_dict={}
+
         replay_buffer_class=UncertaintyReplayBuffer
         policy=IntrinsicRandomWalkPolicy
         
-        uncertainty_policy_kwargs = dict(activation_fn = th.nn.ReLU, net_arch=[1024, 1024], learning_rate=0.0001)
+        uncertainty_policy_kwargs = dict(activation_fn = th.nn.ReLU, net_arch=[1024, 1024], learning_rate=0.001)
         if rnd_config != None:
             uncertainty_policy_kwargs.update(rnd_config)
 
@@ -91,7 +95,7 @@ class IntrinsicRandomWalk(UncertaintyDQN):
         # And then add the following replay buffer kwargs: 
         base_replay_buffer_kwargs = {
                         "uncertainty": uncertainty, 
-                        "state_action_bonus": True, 
+                        "state_action_bonus": False, 
                         "handle_timeout_termination":True, 
                         "uncertainty_of_sampling":True,
                     }
@@ -173,7 +177,15 @@ class IntrinsicRandomWalk(UncertaintyDQN):
             new_obs, rewards, dones, infos = env.step(actions)
 
             # Increase step counts
-            self.episode_steps_taken = [x+1 if not done else 0 for x, done in zip(self.episode_steps_taken, dones)]
+            self.episode_steps_taken = [x+1 for x in self.episode_steps_taken]
+
+            if _HEATMAP:
+                for i in range(env.num_envs):
+                    if self.episode_steps_taken[i] == self.random_steps:
+                        name, data = obs_to_entry(new_obs[i])
+                        if name not in self.start_pos_dict:
+                            self.start_pos_dict[name] = []
+                        self.start_pos_dict[name].append(data)
 
             self.num_timesteps += env.num_envs
             num_collected_steps += 1
@@ -221,9 +233,10 @@ class IntrinsicRandomWalk(UncertaintyDQN):
 
     def predict(self, observation: ndarray | Dict[str, ndarray], state: th.Tuple[ndarray] | None = None, episode_start: ndarray | None = None, deterministic: bool = False) -> th.Tuple[ndarray | th.Tuple[ndarray] | None]:
         assert len(self.episode_steps_taken) == 1, "IntrinsicRandomWalk only supports one environment atm"
-        if self.episode_steps_taken[0] < self.random_steps and not deterministic:
-            obs_tens = th.tensor(observation).to(self.device)
-            return self.policy.intrinsicStep(obs_tens), observation
+        if not deterministic:
+            if self.episode_steps_taken[0] < self.random_steps:
+                obs_tens = th.tensor(observation).to(self.device)
+                return self.policy.intrinsicStep(obs_tens), observation
         return super().predict(observation, state, episode_start, deterministic)
 
 if __name__ == "__main__":

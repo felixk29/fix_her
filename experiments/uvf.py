@@ -1,7 +1,5 @@
 # Stops depcreated warnings
 from time import time
-import matplotlib.pyplot as plt
-import seaborn as sns
 import gymnasium as gym
 from four_room.wrappers import gym_wrapper
 from four_room.utils import obs_to_state
@@ -40,7 +38,7 @@ from fixedHER import FixedHerBuffer
 import warnings
 warnings.filterwarnings("ignore")
 
-from utils import state_to_obs, heatmapCallback
+from utils import state_to_obs, heatmapCallback, renderEpisodeCallback
 
 # https://github.com/g1910/HyperNetworks
 # https://github.com/JJGO/hyperlight
@@ -240,45 +238,6 @@ class UVFWrapper(ObservationWrapper):
         temp = np.all(achieved_goal == desired_goal, axis=(1, 2, 3)).astype(float)
         # temp= np.array([samePos(achieved_goal[i],desired_goal[i]) for i in range(achieved_goal.shape[0])]).astype(float)
         return temp
-
-from stable_baselines3.common.vec_env import VecVideoRecorder
-import imageio.v3 as iio
-
-class renderEpisodeCallback(BaseCallback):
-    def __init__(self, save_dir: str = './experiments/logs/episodes', env = None, log_freq: int = 100000, verbose=0):
-        super(renderEpisodeCallback, self).__init__(verbose)
-        self.env=env
-        self.log_freq = log_freq
-        self.save_dir = save_dir
-        self.once=True
-
-    def _on_step(self) -> bool:
-        if self.num_timesteps % self.log_freq == 0  or self.once:
-            self.once=False
-
-            env=self.env
-
-            imgs=[]
-            obs,_ = env.reset()
-
-            goal=obs_to_state(obs['desired_goal'])
-
-            img=env.render()
-            #
-            done,trunc = False,False
-            imgs.append(img)
-            while not done and not trunc:
-                action, _ = self.model.predict(obs)
-                obs, _, done, trunc , _ = env.step(action)
-                img=env.render()
-
-                #marking goal
-                img[(goal[1]*32)+1:(goal[1]+1)*32,(goal[0]*32)+1:(goal[0]+1)*32]=[0,0,255]
-
-                imgs.append(img)
-            iio.imwrite(f"behaviour{self.num_timesteps//self.log_freq}.gif",imgs,duration=100,loop=0)
-        return True
-
 
 if __name__ == "__main__":
     # callbacks can maybe be made in the on_step() just have to figue out when exactly its called

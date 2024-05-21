@@ -15,11 +15,11 @@ from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.type_aliases import GymEnv, Schedule
 from stable_baselines3.dqn.policies import DQNPolicy
 from doubledqn import DoubleDQN
-
+from stable_baselines3 import DQN
 SelfRandomStart = TypeVar("SelfRandomStart", bound="RandomStart")
+from utils import _HEATMAP, obs_to_entry
 
-
-class RandomStart(DoubleDQN):
+class RandomStart(DQN):
 
     def __init__(
         self,
@@ -73,6 +73,8 @@ class RandomStart(DoubleDQN):
             optimize_memory_usage=optimize_memory_usage,
         )
 
+        if _HEATMAP: 
+            self.start_pos_dict={}
         self.exploration_initial_eps = exploration_initial_eps
         self.exploration_final_eps = exploration_final_eps
         self.exploration_fraction = exploration_fraction
@@ -159,6 +161,16 @@ class RandomStart(DoubleDQN):
             ### Modification:
             self.current_random_steps= [x+1 for x in self.current_random_steps]
             random_steps=self.random_steps
+
+            if _HEATMAP:
+                for i in range(env.num_envs):
+                    if self.current_random_steps[i] == self.random_walk_duration:
+                        name, data = obs_to_entry(new_obs[i])
+                        if name not in self.start_pos_dict:
+                            self.start_pos_dict[name] = []
+                        self.start_pos_dict[name].append(data)
+
+
             # Give access to local variables
             callback.update_locals(locals())
             # Only stop training if return value is False, not when it is None.

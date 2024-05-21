@@ -97,7 +97,7 @@ if __name__ == "__main__":
                         'target_update_interval': 10,
                         'tau': 0.01,
                         'exploration_fraction': 0.5,
-                        'exploration_initial_eps': 0.5,
+                        'exploration_initial_eps': 1.0,
                         'exploration_final_eps': 0.01,
                         'learning_rate': 2.5e-4,
                         'verbose': 0,

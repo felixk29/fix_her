@@ -2,12 +2,10 @@ import warnings
 warnings.filterwarnings("ignore")
 #pls dont hurt me
 
-
 import torch
 import os
 import numpy as np
 import gymnasium as gym
-import wandb
 import stable_baselines3 as sb3 
 from gymnasium import spaces
 
@@ -16,7 +14,7 @@ print("current path: ", (os.getcwd()))
 print("Done importing!")
 import cProfile, pstats
 
-from utils import ExplorationCoverageCallback, UVFStepCounterCallback, randomStepsCallback
+from utils import ExplorationCoverageCallback, UVFStepCounterCallback, randomStepsCallback, heatmapCallback, renderEpisodeCallback
 from four_room.env import FourRoomsEnv
 
 from intrinsicRandomWalk import IntrinsicRandomWalk
@@ -26,10 +24,9 @@ gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 #### Paramampa
 ### EXPERIMT SETUP BUGGY; RUN THEM SOLO
 num_envs=1
-seed=0
 PROFILING=False
-LOGGING=False
-
+LOGGING=True
+eval_freq=100_000
 
 import dill
 from four_room.old_env import FourRoomsEnv
@@ -42,7 +39,9 @@ from adapted_vec_env import AdaptedVecEnv
 from stable_baselines3 import DQN
 
 from stable_baselines3.common.callbacks import EvalCallback
-from wandb.integration.sb3 import WandbCallback
+if LOGGING:
+    import wandb
+    from wandb.integration.sb3 import WandbCallback
 base_log = "./experiments/logs/"
 os.makedirs(base_log, exist_ok=True)
 
@@ -62,13 +61,14 @@ with open('./experiments/four_room/configs/fourrooms_test_0_config.pl', 'rb') as
 with open('./experiments/four_room/configs/fourrooms_test_100_config.pl', 'rb') as file:
     test_100_config = dill.load(file)
 
-def make_env_fn(config, seed: int= 0, rank: int = 0):
+def make_env_fn(config, seed: int= 0, rank: int = 0, render: bool = False):
     def _init():
         env = gym_wrapper(gym.make('MiniGrid-FourRooms-v1', 
                     agent_pos=config['agent positions'], 
                     goal_pos=config['goal positions'], 
                     doors_pos=config['topologies'], 
-                    agent_dir=config['agent directions']))
+                    agent_dir=config['agent directions'],
+                    render_mode='rgb_array' if render else None))
         if seed==0:
             env.reset()
         else:
@@ -117,7 +117,8 @@ class Baseline_CNN(BaseFeaturesExtractor):
 
 
 device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-wandb.tensorboard.patch(root_logdir="./experiments/logs/")
+if LOGGING:
+    wandb.tensorboard.patch(root_logdir="./experiments/logs/")
 
 from copy import deepcopy
 base_cf={'policy':'CnnPolicy',
@@ -144,24 +145,30 @@ base_cf={'policy':'CnnPolicy',
                         'optimizer_kwargs':{'weight_decay': 1e-5},
                         'normalize_images':False
                     }
-                    #,'random_walk_duration':tpc,
-                    #,'tp_chance':tpc,
-                    #,'beta':l
-                    #,'random_steps':15
                 }
 
 model_bases={'tp':tpDQN,'hergo':HERGO,'base':DoubleDQN, 'randomStart':RandomStart, 'intrinsicRandomWalk':IntrinsicRandomWalk}
 
-from stable_baselines3 import HerReplayBuffer
 #for bs, tpc, rn in [(500,0.0,0),(500,0.0,1),(500,1.0,3),(10,0.0,4),(50,0.5,0),(50,1.0,4)]:
 if __name__ == "__main__":
+    seed=0
+    import sys
+    if len(sys.argv)>1:
+        seed=int(sys.argv[1])
+        rn=seed
 
-    for rn in range(10):
-        for eps in [2.0]:
-            bs=50
+    for rn in range(0,1):
+        for bs in [50]:
             #for method in ['intrinsicRandomWalk','tp','hergo','base','randomStart'][:1]:
-            for method in ['hergo']:
-                tpc="Thursday"
+            for eps in range(150,250):
+
+                method='randomStart'
+                tpc="FindingSeed"
+                seed=68
+                np.random.seed(seed)
+                torch.manual_seed(seed)
+                
+
                 print("\n------------------------------------------------")
                 print(f"Starting {method} run {rn} under name \"{tpc}\", buffer size {bs}k, exploration fraction of {eps}")   
                 print("------------------------------------------------\n")
@@ -185,11 +192,14 @@ if __name__ == "__main__":
                     cf['env']=train_env
                     cf['tp_chance']=1.0
                     cf['max_steps']=30
+                    #cf['arch']='hyper'
 
                 elif method=='intrinsicRandomWalk':
                     cf['env']=train_env
                     cf['beta']=300
                     cf['random_steps']=15  #to be double checked
+                    cf['embed_dim']=512
+                    cf['rnd_config']={'net_arch':[eps,eps],'learning_rate':1e-3}
 
                 elif method=='tp':
                     cf['env']=train_env_tp
@@ -197,19 +207,9 @@ if __name__ == "__main__":
 
                 elif method=='randomStart':
                     cf['env']=train_env
-                    cf['random_walk_duration']=15 
+                    cf['random_walk_duration']=15
                 else:
                     cf['env']=train_env
-
-                # if eps==5.0:
-                #     cf['exploration_initial_eps']= 0.5
-
-                # elif eps==6.0:
-                #     cf['beta']=0.0
-
-                # elif eps==7.0:
-                #     cf['random_steps']=0  
-                    
 
                 if LOGGING:
                     run=wandb.init(
@@ -227,25 +227,14 @@ if __name__ == "__main__":
                     profiler = cProfile.Profile()
                     profiler.enable()
 
-                        #tpDQN,HERGO,DoubleDQN, RandomStart, , IntrinsicRandomWalk
+                        #tpDQN,HERGO,DoubleDQN, RandomStart, IntrinsicRandomWalk
                 #model = HERGO(**cf)
                 model_base=model_bases[method]
                 model = model_base(**cf)
 
-
-
-                eval_tr_callback = EvalCallback(tr_eval_env, log_path=f"{path}/tr/{rn}/", eval_freq=(50000//num_envs),
-                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
-
-                eval_0_callback = EvalCallback(test_0_env, log_path=f"{path}/0/{rn}/", eval_freq=(50000//num_envs),
-                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
-
-                eval_100_callback = EvalCallback(test_100_env, log_path=f"{path}/100/{rn}/", eval_freq=(50000//num_envs),
-                                            n_eval_episodes=20, deterministic=True, render=False, verbose=0)
-                
-                #state_action_coverage_callback = ExplorationCoverageCallback(1000, 6240, 3)
-                step_counter_callback=UVFStepCounterCallback(1000)
-                #random_step_counter_callback=randomStepsCallback()
+                eval_tr_callback = EvalCallback(tr_eval_env, log_path=f"{path}/tr/{rn}/", eval_freq=(eval_freq//num_envs), n_eval_episodes=20, deterministic=True, render=False, verbose=0)
+                eval_0_callback = EvalCallback(test_0_env, log_path=f"{path}/0/{rn}/", eval_freq=(eval_freq//num_envs), n_eval_episodes=20, deterministic=True, render=False, verbose=0)
+                eval_100_callback = EvalCallback(test_100_env, log_path=f"{path}/100/{rn}/", eval_freq=(eval_freq//num_envs), n_eval_episodes=20, deterministic=True, render=False, verbose=0)
 
                 callbacks=[]
 
@@ -253,10 +242,18 @@ if __name__ == "__main__":
                     callbacks+=[WandbCallback(log='all', gradient_save_freq=1000)]
 
                 callbacks+=[eval_tr_callback,eval_0_callback,eval_100_callback]
-                #callbacks+=[step_counter_callback]
-                #callbacks+=[random_step_counter_callback]
+                #callbacks+=[ExplorationCoverageCallback(1000, 6240, 3)]
+                #callbacks+=[UVFStepCounterCallback(1000)]
+                #callbacks+=[randomStepsCallback()]
+                render_env=make_env_fn(train_config, seed=0, rank=0, render=True)()
+                callbacks+=[renderEpisodeCallback(log_freq=50_000,id=f"",env=render_env)]
+                callbacks+=[heatmapCallback(log_freq=50_000,id=f"{eps}")]
 
                 model.learn(total_timesteps=500_000, progress_bar=True,  log_interval=10, callback=callbacks)
+
+                # di=model.start_pos_dict
+                # with open(f"{method}_start_pos_{bs}_{eps}.pl", 'wb') as file:
+                #     dill.dump(di, file)
 
                 if LOGGING:
                     run.finish()
