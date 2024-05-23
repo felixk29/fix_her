@@ -6,6 +6,10 @@ experiments/__pycache__
 text/
 wandb
 runs
+
+#specifics
+*.gif
+experiments/exp*.py
 # four_room
 experiments/four_room/tensorboard
 experiments/four_room/__pycache__
