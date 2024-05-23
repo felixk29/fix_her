@@ -220,7 +220,8 @@ class HERGO(DoubleDQN):
         tp_chance:float=.0,
         max_steps:int=30,
         sample_size_mult:int=3,
-        arch:str='stack'
+        arch:str='stack',
+        extend_uvf:bool=False,
     ) -> None:
         super().__init__(
             policy,
@@ -248,7 +249,7 @@ class HERGO(DoubleDQN):
 
     
         self.max_steps=max_steps
-
+        self.extend_uvf=extend_uvf
         self.exploration_initial_eps = exploration_initial_eps
         self.exploration_final_eps = exploration_final_eps
         self.exploration_fraction = exploration_fraction
@@ -312,7 +313,7 @@ class HERGO(DoubleDQN):
                     'exploration_fraction': 0.5,
                     'exploration_initial_eps': 1.0,
                     'exploration_final_eps': 0.05,
-                    'learning_rate': 1e-3,
+                    'learning_rate': 2.5e-4,
                     'verbose': 0,
                     'device': 'cuda',
                     'replay_buffer_class': FixedHerBuffer,
@@ -364,6 +365,7 @@ class HERGO(DoubleDQN):
     uvf_first_obs=[]
 
 
+    
     def reset_uvf_stat(self,id):
         self.interim_goal[id]= None
         self.does_interim_goal[id]= False
@@ -372,9 +374,7 @@ class HERGO(DoubleDQN):
         self.uvf_first_obs[id]=None 
 
 
-
-    #TODO will be the bulk of the new logic, is getting called by learn()
-    # generally yoinked from off_policy_algorithm.py
+    #logic of hergo is added here, has to be altered to be used with multiple environments
     def collect_rollouts(
         self,
         env: VecEnv,
@@ -542,6 +542,12 @@ class HERGO(DoubleDQN):
 
 
                     self.replay_buffer.add(np.array([self._last_original_obs[idx]]), np.array([nex_ob]), np.array([buffer_actions[idx]]), np.array([rew_]), np.array([dones[idx]]), [infos[idx]])  # type: ignore[arg-type]
+                    
+                    if self.extend_uvf:
+                        new_dict=self._to_dict(nex_ob[idx])
+                        old_dict=self._to_dict(self._last_obs[idx])
+                        self.uvf.replay_buffer.add(old_dict, new_dict, np.array([buffer_actions[idx]]), np.array([rewards[idx]]), np.array([dones[idx]]), [infos[idx]])  # type: ignore[arg-type]
+
                     #self._store_transition(replay_buffer, buffer_actions[idx], rewards[idx], new_obs[idx], dones[idx], infos[idx])  # type: ignore[arg-type]
 
             self._last_obs = deepcopy(new_obs)

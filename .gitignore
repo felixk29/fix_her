@@ -1,12 +1,14 @@
 #self done
-experiments/forFun.py
 .vscode/
 experiments/logs
-experiments/wandb   
-experiments/four_room/tensorboard
-four_room
+experiments/wandb  
+experiments/__pycache__
+text/
 wandb
 runs
+# four_room
+experiments/four_room/tensorboard
+experiments/four_room/__pycache__
 
 
 # Byte-compiled / optimized / DLL files

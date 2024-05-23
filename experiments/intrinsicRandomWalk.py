@@ -6,15 +6,15 @@ from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.type_aliases import RolloutReturn, Schedule, TrainFreq
 from stable_baselines3.dqn.policies import DQNPolicy
 import torch as th 
+from stable_baselines3.common.type_aliases import Schedule
 
 from stable_baselines3.common.vec_env import VecEnv
-from max_sb3.dqn.upolicies import UncertaintyMlpPolicy
 
+from max_sb3.dqn.upolicies import UncertaintyMlpPolicy
 from max_sb3.common.uncertainties import RNDUncertaintyStateAction
 from max_sb3.common.ubuffers import UncertaintyReplayBuffer
 from max_sb3.dqn.udqn import UncertaintyDQN
 
-from max_sb3.common.type_aliases import Schedule
 from torch import nn
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, FlattenExtractor
 from typing import Any, Dict, List, Optional, Type
@@ -25,6 +25,7 @@ from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.type_aliases import GymEnv, RolloutReturn, Schedule, TrainFreq, TrainFrequencyUnit
 from stable_baselines3.common.utils import should_collect_more_steps
 from stable_baselines3.common.vec_env import VecEnv
+
 class IntrinsicRandomWalkPolicy(UncertaintyMlpPolicy):
     def __init__(
         self,
@@ -82,7 +83,7 @@ class IntrinsicRandomWalk(UncertaintyDQN):
         if rnd_config != None:
             uncertainty_policy_kwargs.update(rnd_config)
 
-        uncertainty = RNDUncertaintyStateAction(
+        self.uncertainty = RNDUncertaintyStateAction(
                 beta, 
                 env, 
                 embed_dim, 
@@ -94,8 +95,8 @@ class IntrinsicRandomWalk(UncertaintyDQN):
 
         # And then add the following replay buffer kwargs: 
         base_replay_buffer_kwargs = {
-                        "uncertainty": uncertainty, 
-                        "state_action_bonus": False, 
+                        "uncertainty": self.uncertainty, 
+                        "state_action_bonus": True, 
                         "handle_timeout_termination":True, 
                         "uncertainty_of_sampling":True,
                     }
@@ -199,8 +200,12 @@ class IntrinsicRandomWalk(UncertaintyDQN):
             # Retrieve reward and episode length if using Monitor wrapper
             self._update_info_buffer(infos, dones)
 
-            # Store data in replay buffer (normalized action and unnormalized observation)
-            self._store_transition(replay_buffer, buffer_actions, new_obs, rewards, dones, infos)  # type: ignore[arg-type]
+            #Store data in replay buffer (normalized action and unnormalized observation)
+            # if self.episode_steps_taken[0] < self.random_steps:
+            #     self.uncertainty.observe(new_obs, buffer_actions)
+            # else:
+            if self.episode_steps_taken[0] >= self.random_steps:
+                self._store_transition(replay_buffer, buffer_actions, new_obs, rewards, dones, infos)  # type: ignore[arg-type]
 
             self._update_current_progress_remaining(self.num_timesteps, self._total_timesteps)
 

@@ -19,7 +19,7 @@ from stable_baselines3 import DQN
 SelfRandomStart = TypeVar("SelfRandomStart", bound="RandomStart")
 from utils import _HEATMAP, obs_to_entry
 
-class RandomStart(DQN):
+class RandomStart(DoubleDQN):
 
     def __init__(
         self,

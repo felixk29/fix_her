@@ -25,8 +25,8 @@ gym.register('MiniGrid-FourRooms-v1', FourRoomsEnv)
 ### EXPERIMT SETUP BUGGY; RUN THEM SOLO
 num_envs=1
 PROFILING=False
-LOGGING=True
-eval_freq=100_000
+LOGGING=False
+eval_freq=50_000
 
 import dill
 from four_room.old_env import FourRoomsEnv
@@ -133,7 +133,7 @@ base_cf={'policy':'CnnPolicy',
                     'exploration_fraction': 0.5,
                     'exploration_initial_eps': 1.0,
                     'exploration_final_eps': 0.1,
-                    'learning_rate': 2.5e-4,
+                    'learning_rate': 1e-4,
                     'verbose': 0,
                     'device': 'cuda',
                     'policy_kwargs':{
@@ -157,17 +157,14 @@ if __name__ == "__main__":
         seed=int(sys.argv[1])
         rn=seed
 
-    for rn in range(0,1):
-        for bs in [50]:
+    for rn in range(0,10):
+        for method in ['hergo']:
+            bs=50
             #for method in ['intrinsicRandomWalk','tp','hergo','base','randomStart'][:1]:
-            for eps in range(150,250):
+            for eps in [1,2]:
 
-                method='randomStart'
-                tpc="FindingSeed"
-                seed=68
-                np.random.seed(seed)
-                torch.manual_seed(seed)
-                
+                #method='hergo'
+                tpc="hergoExtended"
 
                 print("\n------------------------------------------------")
                 print(f"Starting {method} run {rn} under name \"{tpc}\", buffer size {bs}k, exploration fraction of {eps}")   
@@ -192,14 +189,15 @@ if __name__ == "__main__":
                     cf['env']=train_env
                     cf['tp_chance']=1.0
                     cf['max_steps']=30
+                    cf['extend_uvf']=False if eps==1 else True
                     #cf['arch']='hyper'
 
                 elif method=='intrinsicRandomWalk':
                     cf['env']=train_env
                     cf['beta']=300
                     cf['random_steps']=15  #to be double checked
-                    cf['embed_dim']=512
-                    cf['rnd_config']={'net_arch':[eps,eps],'learning_rate':1e-3}
+                    # cf['embed_dim']=512
+                    # cf['rnd_config']={'net_arch':[eps,eps],'learning_rate':1e-3}
 
                 elif method=='tp':
                     cf['env']=train_env_tp
@@ -245,8 +243,8 @@ if __name__ == "__main__":
                 #callbacks+=[ExplorationCoverageCallback(1000, 6240, 3)]
                 #callbacks+=[UVFStepCounterCallback(1000)]
                 #callbacks+=[randomStepsCallback()]
-                render_env=make_env_fn(train_config, seed=0, rank=0, render=True)()
-                callbacks+=[renderEpisodeCallback(log_freq=50_000,id=f"",env=render_env)]
+                # render_env=make_env_fn(train_config, seed=0, rank=0, render=True)()
+                # callbacks+=[renderEpisodeCallback(log_freq=50_000,id=f"",env=render_env)]
                 callbacks+=[heatmapCallback(log_freq=50_000,id=f"{eps}")]
 
                 model.learn(total_timesteps=500_000, progress_bar=True,  log_interval=10, callback=callbacks)
