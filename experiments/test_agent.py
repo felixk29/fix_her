@@ -50,7 +50,6 @@ from torch import nn
 from tpdqn import tpDQN
 from doubledqn import DoubleDQN
 from moveRandom import RandomStart
-from rnd_dqn import RND_DQN
 
 with open('./experiments/four_room/configs/fourrooms_train_config.pl', 'rb') as file:
     train_config = dill.load(file)
@@ -157,7 +156,7 @@ if __name__ == "__main__":
         seed=int(sys.argv[1])
         rn=seed
 
-    for rn in range(0,10):
+    for rn in range(3,10):
         for method in ['hergo']:
             bs=50
             #for method in ['intrinsicRandomWalk','tp','hergo','base','randomStart'][:1]:
