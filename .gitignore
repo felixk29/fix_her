@@ -4,6 +4,7 @@ experiments/logs
 experiments/wandb  
 experiments/__pycache__
 text/
+graphs
 wandb
 runs
 

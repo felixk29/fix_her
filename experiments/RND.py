@@ -34,7 +34,7 @@ class RND(nn.Module):
         for p in self.target.parameters():
             p.requires_grad = False
 
-        self.optimizer = th.optim.Adam(self.predictor.parameters(), lr=2.5e-4, weight_decay=1e-5)
+        self.optimizer = th.optim.Adam(self.predictor.parameters(), lr=1e-3, weight_decay=1e-5)
 
         self.to(device)
 
