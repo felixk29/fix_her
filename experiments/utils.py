@@ -7,7 +7,20 @@ from time import time
 import torch as th
 from stable_baselines3.common.vec_env import VecVideoRecorder
 import imageio.v3 as iio
-class ExplorationCoverageCallback(BaseCallback):
+import os
+
+colors={'base':'blue','randomStart':'royalblue',
+        'rnd_base':'hotpink','intrinsicRandomWalk':'lightcoral',
+        'hergo':'firebrick','tp':'forestgreen'}
+
+names={'base':'Baseline','randomStart':'Pure Exploration - Epsilon Greedy',
+        'rnd_base':'Baseline with Intrinsic Reward','intrinsicRandomWalk':'Pure Exploration - Intrinsic Reward',
+        'hergo':'GoExploit','tp':'Teleport'}
+
+def moving_average(data, window_size):
+    return np.convolve(data, np.ones(window_size)/window_size, mode='valid')
+
+class ExplorationCoverageCallback_Max(BaseCallback):
     def __init__(self, log_freq, total_states, num_actions, verbose=0):
         super(ExplorationCoverageCallback, self).__init__(verbose)
         self.state_action_coverage_set = set()
@@ -23,7 +36,35 @@ class ExplorationCoverageCallback(BaseCallback):
             self.logger.record('train/state_action_coverage_exploration', len(self.state_action_coverage_set) / self.total_state_actions)
 
         return True
+    
+class ExplorationCoverageCallback(BaseCallback):
+    def __init__(self, name, log_freq, total_states, num_actions, state_action=True, verbose=0):
+        super(ExplorationCoverageCallback, self).__init__(verbose)
+        base="./experiments/logs/diversity"
+        os.makedirs(base, exist_ok=True)
+        file_name = f"{base}/{name}.txt"
+        self.file = open(file_name, "w")
+        self.does_state_action=state_action
+        self.coverage = set()
+        self.log_freq = log_freq
+        self.max_val = total_states*num_actions if state_action else total_states
 
+    def _on_step(self) -> bool:
+        self.coverage=set()
+        if self.num_timesteps % self.log_freq == 0:
+            r=self.locals['replay_buffer']
+            sample=r.sample(r.size())
+            for i in range(r.size()):
+                if self.does_state_action:
+                    self.coverage.add(hash((hash(sample.observations[i].cpu().numpy().tobytes()), hash(sample.actions[i].cpu().numpy().tobytes()))))
+                else:
+                    self.coverage.add(hash(sample.observations[i].cpu().numpy().tobytes()))
+            self.file.write(f"{len(self.coverage) / self.max_val}\n")
+
+        return True
+
+    def __del__(self):
+        self.file.close()
 _HEATMAP = False
 def obs_to_entry(obs):
     state=obs_to_state(obs)

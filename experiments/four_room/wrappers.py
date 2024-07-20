@@ -30,6 +30,23 @@ class SparseActionsWrapper(Wrapper):
         new_action_space = spaces.Discrete(3)
         self.action_space = new_action_space
 
+
+class DenseActionsWrapper(Wrapper):
+    """
+        Reduce the action space to only left, right and forward.
+    """
+    def __init__(self, env, num_actions=10):
+        super().__init__(env)
+        assert num_actions > 3        
+        new_action_space = spaces.Discrete(num_actions)
+        self.action_space = new_action_space
+
+    def step(self, action):
+        if action > 5:
+            action = 5
+        return self.env.step(action)
+
+
 class SparseFullyObsWrapper(FullyObsWrapper):
     """
         Transform the observation space to have seperate channels for for every dimension of observation.
@@ -109,4 +126,10 @@ def gym_wrapper(env):
     return ImgObsWrapper(
                 UndiscountedRewardWrapper(
                     SparseActionsWrapper(
+                            SparseFullyObsWrapper(env))))
+
+def gym_wrapper_more_actions(env, num_actions): 
+    return ImgObsWrapper(
+                UndiscountedRewardWrapper(
+                    DenseActionsWrapper(
                             SparseFullyObsWrapper(env))))
