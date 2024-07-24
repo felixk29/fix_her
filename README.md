@@ -5,8 +5,8 @@ Code is only in the experiments section
  - the code in ./experiments/four_room was taken from this project and altered to allow state loading: [Four_Room](https://github.com/MWeltevrede/four_room)
 ## Novel methods include 
  - Pure Exploration
-   - Random Walk  (moveRandom.py)
-   - Intrinsic Reward Walk (intrinsicRandomWalk.py)
+   - epsilon-greedy based (moveRandom.py)
+   - intrinsic reward based (intrinsicRandomWalk.py)
  - Teleportation (tpdqn.py)
  - Hergo (hergo.py)
 
